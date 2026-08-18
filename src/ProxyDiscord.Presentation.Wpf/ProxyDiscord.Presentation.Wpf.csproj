@@ -1,0 +1,50 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProxyDiscord.Application\ProxyDiscord.Application.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Domain\ProxyDiscord.Domain.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Infrastructure.ProcessManagement\ProxyDiscord.Infrastructure.ProcessManagement.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Infrastructure.VpnGate\ProxyDiscord.Infrastructure.VpnGate.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Infrastructure.Connectivity\ProxyDiscord.Infrastructure.Connectivity.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Infrastructure.OpenVpn\ProxyDiscord.Infrastructure.OpenVpn.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Infrastructure.Ras\ProxyDiscord.Infrastructure.Ras.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Infrastructure.Routing\ProxyDiscord.Infrastructure.Routing.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Infrastructure.StateStore\ProxyDiscord.Infrastructure.StateStore.csproj" />
+    <ProjectReference Include="..\ProxyDiscord.Infrastructure.WinDivert\ProxyDiscord.Infrastructure.WinDivert.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- O nome do produto aparece no prompt do UAC e na coluna "Nome" do Gerenciador de Tarefas.
+         O AssemblyName (e com ele o .exe, os logs e os caminhos) fica como está de proposito. -->
+    <AssemblyTitle>Discord-VPN</AssemblyTitle>
+    <Product>Discord-VPN</Product>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\app.ico</ApplicationIcon>
+    <!-- WinDivert.dll is loaded via a plain DllImport("WinDivert.dll") with no path, so it
+         (and the matching .sys driver) must sit next to the .exe. build/VendoredNatives.props
+         does that copy; pinning to x64 keeps the native pairing unambiguous. -->
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\assets\*.ico">
+      <Link>assets\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+
+  <Import Project="..\..\build\VendoredNatives.props" />
+
+</Project>

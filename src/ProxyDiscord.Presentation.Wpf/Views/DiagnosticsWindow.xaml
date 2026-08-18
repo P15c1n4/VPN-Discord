@@ -1,0 +1,70 @@
+<Window x:Class="ProxyDiscord.Presentation.Wpf.Views.DiagnosticsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Diagnóstico do túnel" Height="620" Width="820"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,12">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Caminho do pacote" Style="{StaticResource SectionHeaderStyle}"/>
+                    <TextBlock Grid.Column="1" Text="{Binding ScopeText}" Style="{StaticResource SecondaryTextStyle}"/>
+                </Grid>
+                <ItemsControl ItemsSource="{Binding Stages}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16"/>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Ellipse Grid.Column="0" Width="9" Height="9" VerticalAlignment="Center">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="{StaticResource StatusErrorBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHealthy}" Value="True">
+                                                    <Setter Property="Fill" Value="{StaticResource StatusConnectedBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock Grid.Column="1" Text="{Binding Step}" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="2" Text="{Binding Value}" VerticalAlignment="Center"
+                                           Style="{StaticResource SecondaryTextStyle}" TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding Value}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+        <Border Grid.Row="1" Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,12">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Grid.Row="0" Text="Eventos" Style="{StaticResource SectionHeaderStyle}"/>
+                <ListBox Grid.Row="1" ItemsSource="{Binding Events}" FontFamily="Consolas" FontSize="11"
+                         BorderThickness="0" HorizontalContentAlignment="Stretch"/>
+            </Grid>
+        </Border>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Abrir pasta de logs" Command="{Binding OpenLogFolderCommand}" Margin="0,0,8,0"/>
+            <Button Content="Copiar relatório" Command="{Binding CopyReportCommand}" Style="{StaticResource PrimaryButtonStyle}"/>
+        </StackPanel>
+    </Grid>
+</Window>

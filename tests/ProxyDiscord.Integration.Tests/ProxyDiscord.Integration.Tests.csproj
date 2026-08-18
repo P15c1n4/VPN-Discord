@@ -1,0 +1,41 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="NSubstitute" Version="6.2.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ProxyDiscord.Presentation.Wpf\ProxyDiscord.Presentation.Wpf.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Application\ProxyDiscord.Application.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Domain\ProxyDiscord.Domain.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.ProcessManagement\ProxyDiscord.Infrastructure.ProcessManagement.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.VpnGate\ProxyDiscord.Infrastructure.VpnGate.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.Connectivity\ProxyDiscord.Infrastructure.Connectivity.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.Ras\ProxyDiscord.Infrastructure.Ras.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.Routing\ProxyDiscord.Infrastructure.Routing.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.StateStore\ProxyDiscord.Infrastructure.StateStore.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.WinDivert\ProxyDiscord.Infrastructure.WinDivert.csproj" />
+  </ItemGroup>
+
+  <Import Project="..\..\build\VendoredNatives.props" />
+
+</Project>
