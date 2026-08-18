@@ -6,9 +6,11 @@ O Discord-VPN limita-se a realizar o tunelamento de pacotes TCP e UDP **APENAS**
 
 ---
 ## **ATENÇÃO**
->### .NET 8
 >### WinDivert 2.2
->### Claude 
+>WinDivert pode apresentar incompatibilidade com outros softwares que realizem leitura, redirecionamento, bloqueio, filtragem ou manipulação de pacotes, como medidores de DPS em jogos, sistemas de monitoramento de tráfego ou outros proxies e redutores de ping.
+>### .NET 8
+> Instalação Desnecessária na versão FULL_PORTABLE.
+>### Contem Claude.
 
 ---
 ## USO
