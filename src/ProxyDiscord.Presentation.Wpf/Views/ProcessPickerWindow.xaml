@@ -1,0 +1,53 @@
+<Window x:Class="ProxyDiscord.Presentation.Wpf.Views.ProcessPickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:ProxyDiscord.Presentation.Wpf.ViewModels"
+        xmlns:entities="clr-namespace:ProxyDiscord.Domain.Entities;assembly=ProxyDiscord.Domain"
+        Title="Selecionar processo" Height="520" Width="560"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="Aplicativos em execução" Style="{StaticResource SectionHeaderStyle}"/>
+
+        <Border Grid.Row="1" Style="{StaticResource PanelBorderStyle}" Margin="0,4,0,8">
+            <TreeView x:Name="ProcessTreeView"
+                      ItemsSource="{Binding Groups}"
+                      BorderThickness="0"
+                      SelectedItemChanged="ProcessTreeView_SelectedItemChanged"
+                      MouseDoubleClick="ProcessTreeView_MouseDoubleClick">
+                <TreeView.ItemContainerStyle>
+                    <Style TargetType="TreeViewItem">
+                        <Setter Property="Padding" Value="2,1"/>
+                    </Style>
+                </TreeView.ItemContainerStyle>
+                <TreeView.Resources>
+                    <HierarchicalDataTemplate DataType="{x:Type vm:ProcessGroupViewModel}" ItemsSource="{Binding Instances}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding InstanceText}" Style="{StaticResource SecondaryTextStyle}" Margin="6,0,0,0"/>
+                            <TextBlock Text="{Binding PathText}" Style="{StaticResource SecondaryTextStyle}" Margin="10,0,0,0"
+                                       TextTrimming="CharacterEllipsis" MaxWidth="300" ToolTip="{Binding PathText}"/>
+                        </StackPanel>
+                    </HierarchicalDataTemplate>
+                    <DataTemplate DataType="{x:Type entities:ProcessInfo}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Name}"/>
+                            <TextBlock Text="{Binding Pid, StringFormat='PID {0}'}"
+                                       Style="{StaticResource SecondaryTextStyle}" Margin="8,0,0,0"/>
+                        </StackPanel>
+                    </DataTemplate>
+                </TreeView.Resources>
+            </TreeView>
+        </Border>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <TextBlock Text="{Binding LoadError}" Foreground="{StaticResource StatusErrorBrush}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+            <Button Content="Atualizar" Command="{Binding LoadCommand}" Margin="0,0,8,0"/>
+            <Button Content="Selecionar" Style="{StaticResource PrimaryButtonStyle}" Click="SelectButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

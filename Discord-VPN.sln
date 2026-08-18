@@ -1,0 +1,97 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{A3ED933B-B048-4C2B-B37D-852461237151}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Application", "src\ProxyDiscord.Application\ProxyDiscord.Application.csproj", "{CEB7109F-6E58-4698-8528-4316F852C27C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Domain", "src\ProxyDiscord.Domain\ProxyDiscord.Domain.csproj", "{D4CFC153-E8AD-4891-AF7A-2D74C2FED43D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure.Connectivity", "src\ProxyDiscord.Infrastructure.Connectivity\ProxyDiscord.Infrastructure.Connectivity.csproj", "{E93C8912-95ED-4569-8844-4EBC566102B0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure.OpenVpn", "src\ProxyDiscord.Infrastructure.OpenVpn\ProxyDiscord.Infrastructure.OpenVpn.csproj", "{F0736C4C-B5F1-458A-9B62-E5FD99889F5B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure.ProcessManagement", "src\ProxyDiscord.Infrastructure.ProcessManagement\ProxyDiscord.Infrastructure.ProcessManagement.csproj", "{AB53DBB6-497E-46F7-B70F-DA5DA73F2C6D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure.Ras", "src\ProxyDiscord.Infrastructure.Ras\ProxyDiscord.Infrastructure.Ras.csproj", "{23603FAC-18B4-43D3-903B-8C8672474E29}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure.Routing", "src\ProxyDiscord.Infrastructure.Routing\ProxyDiscord.Infrastructure.Routing.csproj", "{D6A85C68-6913-4309-B232-1767BC9F82A7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure.StateStore", "src\ProxyDiscord.Infrastructure.StateStore\ProxyDiscord.Infrastructure.StateStore.csproj", "{6CF8147D-36A5-43EA-9664-26AD8780403F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure.VpnGate", "src\ProxyDiscord.Infrastructure.VpnGate\ProxyDiscord.Infrastructure.VpnGate.csproj", "{7255C396-E16A-482F-A6A8-BB8E8A7BC2C9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure.WinDivert", "src\ProxyDiscord.Infrastructure.WinDivert\ProxyDiscord.Infrastructure.WinDivert.csproj", "{D737F2F9-A547-4688-9590-2C86B0AD266A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Presentation.Wpf", "src\ProxyDiscord.Presentation.Wpf\ProxyDiscord.Presentation.Wpf.csproj", "{35B1EF24-C50A-4309-9D23-B7A57DFC3928}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CEB7109F-6E58-4698-8528-4316F852C27C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CEB7109F-6E58-4698-8528-4316F852C27C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CEB7109F-6E58-4698-8528-4316F852C27C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CEB7109F-6E58-4698-8528-4316F852C27C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D4CFC153-E8AD-4891-AF7A-2D74C2FED43D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D4CFC153-E8AD-4891-AF7A-2D74C2FED43D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D4CFC153-E8AD-4891-AF7A-2D74C2FED43D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D4CFC153-E8AD-4891-AF7A-2D74C2FED43D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E93C8912-95ED-4569-8844-4EBC566102B0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E93C8912-95ED-4569-8844-4EBC566102B0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E93C8912-95ED-4569-8844-4EBC566102B0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E93C8912-95ED-4569-8844-4EBC566102B0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F0736C4C-B5F1-458A-9B62-E5FD99889F5B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F0736C4C-B5F1-458A-9B62-E5FD99889F5B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F0736C4C-B5F1-458A-9B62-E5FD99889F5B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F0736C4C-B5F1-458A-9B62-E5FD99889F5B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AB53DBB6-497E-46F7-B70F-DA5DA73F2C6D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AB53DBB6-497E-46F7-B70F-DA5DA73F2C6D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AB53DBB6-497E-46F7-B70F-DA5DA73F2C6D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AB53DBB6-497E-46F7-B70F-DA5DA73F2C6D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{23603FAC-18B4-43D3-903B-8C8672474E29}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{23603FAC-18B4-43D3-903B-8C8672474E29}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{23603FAC-18B4-43D3-903B-8C8672474E29}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{23603FAC-18B4-43D3-903B-8C8672474E29}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D6A85C68-6913-4309-B232-1767BC9F82A7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D6A85C68-6913-4309-B232-1767BC9F82A7}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D6A85C68-6913-4309-B232-1767BC9F82A7}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D6A85C68-6913-4309-B232-1767BC9F82A7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6CF8147D-36A5-43EA-9664-26AD8780403F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6CF8147D-36A5-43EA-9664-26AD8780403F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6CF8147D-36A5-43EA-9664-26AD8780403F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6CF8147D-36A5-43EA-9664-26AD8780403F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7255C396-E16A-482F-A6A8-BB8E8A7BC2C9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7255C396-E16A-482F-A6A8-BB8E8A7BC2C9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7255C396-E16A-482F-A6A8-BB8E8A7BC2C9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7255C396-E16A-482F-A6A8-BB8E8A7BC2C9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D737F2F9-A547-4688-9590-2C86B0AD266A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D737F2F9-A547-4688-9590-2C86B0AD266A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D737F2F9-A547-4688-9590-2C86B0AD266A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D737F2F9-A547-4688-9590-2C86B0AD266A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{35B1EF24-C50A-4309-9D23-B7A57DFC3928}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{35B1EF24-C50A-4309-9D23-B7A57DFC3928}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{35B1EF24-C50A-4309-9D23-B7A57DFC3928}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{35B1EF24-C50A-4309-9D23-B7A57DFC3928}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{CEB7109F-6E58-4698-8528-4316F852C27C} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{D4CFC153-E8AD-4891-AF7A-2D74C2FED43D} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{E93C8912-95ED-4569-8844-4EBC566102B0} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{F0736C4C-B5F1-458A-9B62-E5FD99889F5B} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{AB53DBB6-497E-46F7-B70F-DA5DA73F2C6D} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{23603FAC-18B4-43D3-903B-8C8672474E29} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{D6A85C68-6913-4309-B232-1767BC9F82A7} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{6CF8147D-36A5-43EA-9664-26AD8780403F} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{7255C396-E16A-482F-A6A8-BB8E8A7BC2C9} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{D737F2F9-A547-4688-9590-2C86B0AD266A} = {A3ED933B-B048-4C2B-B37D-852461237151}
+		{35B1EF24-C50A-4309-9D23-B7A57DFC3928} = {A3ED933B-B048-4C2B-B37D-852461237151}
+	EndGlobalSection
+EndGlobal
