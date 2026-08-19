@@ -1,6 +1,6 @@
 # Discord-VPN
 
-O Discord-VPN é uma ferramenta desenvolvida para facilitar o uso de sistemas públicos de VPN da VPN Gate, da Graduate School of University of Tsukuba, no Japão, cujo lema é: **"Free Access to World Knowledge Beyond Government's Firewall."** Além disso, oferece suporte a outros sistemas privados de VPN por meio dos protocolos OpenVPN e MS-SSTP.
+O Discord-VPN é uma ferramenta desenvolvida para facilitar o uso de sistemas públicos de VPN da VPN Gate, pertencente a Graduate School of University of Tsukuba, no Japão, cujo lema é: **"Free Access to World Knowledge Beyond Government's Firewall."** Além disso, oferece suporte a outros sistemas privados de VPN por meio dos protocolos OpenVPN e MS-SSTP.
 
 O Discord-VPN limita-se a realizar o tunelamento de pacotes TCP e UDP **APENAS** no processo escolhido do sistema operacional, sem afetar outros programas ou processos em execução na máquina.
 
