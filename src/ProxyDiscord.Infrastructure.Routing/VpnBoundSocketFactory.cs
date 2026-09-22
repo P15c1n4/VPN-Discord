@@ -22,10 +22,24 @@ public static class VpnBoundSocketFactory
         return socket;
     }
 
+    // Fixa o socket numa interface física (ex.: a da rota padrão), sem depender de qual rota
+    // padrão o Windows escolheria — com a rota do túnel instalada, essa escolha não é confiável.
+    public static Socket CreateTcpSocketOnInterface(uint interfaceIndex)
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        PinToInterface(socket, interfaceIndex);
+        return socket;
+    }
+
+    private static void PinToInterface(Socket socket, uint interfaceIndex)
+    {
+        var networkOrderIndex = IPAddress.HostToNetworkOrder((int)interfaceIndex);
+        socket.SetSocketOption(SocketOptionLevel.IP, IP_UNICAST_IF, networkOrderIndex);
+    }
+
     private static void PinToVpn(Socket socket, VpnAdapterInfo adapter)
     {
-        var networkOrderIndex = IPAddress.HostToNetworkOrder((int)adapter.InterfaceIndex);
-        socket.SetSocketOption(SocketOptionLevel.IP, IP_UNICAST_IF, networkOrderIndex);
+        PinToInterface(socket, adapter.InterfaceIndex);
 
         if (IPAddress.TryParse(adapter.LocalIp, out var localIp) &&
             localIp.AddressFamily == AddressFamily.InterNetwork)
