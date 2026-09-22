@@ -69,17 +69,23 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         }
 
         var udpWorks = await TryDnsThroughVpnAsync(adapter, cancellationToken);
-        var direct = await TryGetPublicIpDirectAsync(cancellationToken);
+        var direct = await TryGetPublicIpDirectAsync(adapter, cancellationToken);
+        var udpNote = udpWorks ? "UDP ok" : "UDP sem resposta";
 
+        // A sonda fixada no túnel já respondeu, então a saída pela VPN está provada. IP igual ao
+        // direto não prova o contrário (ex.: a sonda direta também acabou saindo pelo túnel), então
+        // vira aviso em vez de derrubar uma VPN que funciona.
         if (direct is not null && string.Equals(direct, throughVpn, StringComparison.OrdinalIgnoreCase))
         {
+            logger.LogWarning(
+                "Auto-teste: o IP público pela VPN ({Ip}) é igual ao da conexão direta. " +
+                "A sonda pelo túnel respondeu, então a VPN segue ativa.", throughVpn);
             return new EgressSelfTestResult(
-                false,
-                $"o IP público pela VPN ({throughVpn}) é igual ao da conexão direta — o tráfego não está saindo pelo túnel.",
+                true,
+                $"IP público pela VPN {throughVpn} (igual ao direto — verifique as rotas), TCP ok, {udpNote}.",
                 throughVpn, direct, udpWorks);
         }
 
-        var udpNote = udpWorks ? "UDP ok" : "UDP sem resposta";
         return new EgressSelfTestResult(
             true,
             $"IP público pela VPN {throughVpn} (direto {direct ?? "desconhecido"}), TCP ok, {udpNote}.",
@@ -124,13 +130,27 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         return null;
     }
 
-    private static async Task<string?> TryGetPublicIpDirectAsync(CancellationToken cancellationToken)
+    private async Task<string?> TryGetPublicIpDirectAsync(VpnAdapterInfo adapter, CancellationToken cancellationToken)
     {
+        // Um socket sem vínculo segue a rota que o Windows preferir, que pode ser a do túnel.
+        // Fixar na interface da rota padrão física garante que "direto" é mesmo direto.
+        var physical = IpForwardNative.ReadIpv4Table()
+            .Where(row => row.IsDefaultRoute && row.InterfaceIndex != adapter.InterfaceIndex)
+            .OrderBy(row => row.Metric)
+            .Select(row => (uint?)row.InterfaceIndex)
+            .FirstOrDefault();
+
+        if (physical is null)
+        {
+            logger.LogWarning("Auto-teste: nenhuma rota padrão fora da VPN; IP direto não será consultado.");
+            return null;
+        }
+
         foreach (var (host, path) in PUBLIC_IP_ENDPOINTS)
         {
             try
             {
-                using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                using var socket = VpnBoundSocketFactory.CreateTcpSocketOnInterface(physical.Value);
                 var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken);
                 var target = Array.Find(addresses, a => a.AddressFamily == AddressFamily.InterNetwork);
                 if (target is null)
