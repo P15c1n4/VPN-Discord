@@ -1,0 +1,32 @@
+<Project>
+
+  <!--
+    Copies the vendored native binaries to the output root.
+
+    The root is not optional: the P/Invoke declarations use a bare DllImport("WinDivert.dll"),
+    which the Windows loader resolves from the application directory only - never from an
+    "x64\" subfolder. Shipping them in a subfolder is the exact mistake documented in
+    docs/DESIGN.md, and it fails at runtime with a DllNotFoundException rather than at build.
+
+    Imported by every project that actually loads the driver (the WPF app, the WinDivert
+    infrastructure project and the integration tests) so the block is not copy-pasted three times.
+  -->
+
+  <PropertyGroup>
+    <VendorRoot Condition="'$(VendorRoot)' == ''">$(MSBuildThisFileDirectory)..\vendor\</VendorRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(VendorRoot)windivert\x64\WinDivert.dll">
+      <Link>WinDivert.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+    <None Include="$(VendorRoot)windivert\x64\WinDivert64.sys">
+      <Link>WinDivert64.sys</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+
+</Project>
