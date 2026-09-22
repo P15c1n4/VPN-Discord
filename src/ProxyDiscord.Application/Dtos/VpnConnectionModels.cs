@@ -5,8 +5,8 @@ namespace ProxyDiscord.Application.Dtos;
 public sealed record VpnConnectionRequest(
     HostEndpoint Endpoint,
     VpnProtocol Protocol,
-    string Username,
-    string Password,
+    string? Username,
+    string? Password,
     string EntryNameHint,
     string? OpenVpnConfigBase64 = null);
 
@@ -29,3 +29,13 @@ public sealed record VpnAdapterInfo(
     uint InterfaceIndex,
     uint SubInterfaceIndex,
     string? GatewayIp = null);
+
+public sealed record OutboundInterfaceInfo(
+    string LocalIp,
+    uint InterfaceIndex,
+    string Alias);
+
+public sealed class VpnConnectionLostEventArgs(string reason) : EventArgs
+{
+    public string Reason { get; } = reason;
+}

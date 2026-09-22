@@ -26,13 +26,38 @@ internal sealed class WinDivertHandle : IWinDivertHandle
             throw new Win32Exception(error, WinDivertOpenFailure.Describe(error, filter, "NETWORK"));
         }
 
-        WinDivertNative.WinDivertSetParam(_handle, WinDivertParam.QueueLength, QUEUE_LENGTH);
-        WinDivertNative.WinDivertSetParam(_handle, WinDivertParam.QueueSize, QUEUE_SIZE);
-        WinDivertNative.WinDivertSetParam(_handle, WinDivertParam.QueueTime, QUEUE_TIME);
+        try
+        {
+            EnsureParameter(WinDivertParam.QueueLength, QUEUE_LENGTH);
+            EnsureParameter(WinDivertParam.QueueSize, QUEUE_SIZE);
+            EnsureParameter(WinDivertParam.QueueTime, QUEUE_TIME);
 
-        _packetBufferSize = bufferSize;
-        _packetBuffer = Marshal.AllocHGlobal(bufferSize);
-        _sendStaging = new byte[bufferSize];
+            _packetBufferSize = bufferSize;
+            _packetBuffer = Marshal.AllocHGlobal(bufferSize);
+            _sendStaging = new byte[bufferSize];
+        }
+        catch
+        {
+            if (_packetBuffer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(_packetBuffer);
+            }
+
+            WinDivertNative.WinDivertShutdown(_handle, WinDivertShutdownHow.Both);
+            WinDivertNative.WinDivertClose(_handle);
+            throw;
+        }
+    }
+
+    private void EnsureParameter(WinDivertParam parameter, ulong value)
+    {
+        if (WinDivertNative.WinDivertSetParam(_handle, parameter, value))
+        {
+            return;
+        }
+
+        var error = Marshal.GetLastWin32Error();
+        throw new Win32Exception(error, $"Não foi possível configurar a fila do WinDivert ({parameter}).");
     }
 
     public bool TryReceive(byte[] buffer, out int length, out PacketAddress address, out int win32Error)

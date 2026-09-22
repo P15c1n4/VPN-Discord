@@ -15,6 +15,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProcessRoutingEngine, ProcessRoutingEngine>();
         services.AddSingleton<IVpnRouteManager, VpnRouteManager>();
         services.AddSingleton<IVpnEgressSelfTest, VpnEgressSelfTest>();
+        services.AddSingleton<IOutboundInterfaceResolver, OutboundInterfaceResolver>();
+        services.AddSingleton<IVpnInterfaceGatewayResolver, VpnInterfaceGatewayResolver>();
         return services;
     }
 }

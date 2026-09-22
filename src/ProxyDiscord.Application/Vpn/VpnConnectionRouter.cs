@@ -14,6 +14,8 @@ public sealed class VpnConnectionRouter(
 
     private IVpnProvider? _active;
 
+    public event EventHandler<VpnConnectionLostEventArgs>? ConnectionLost;
+
     public async Task<VpnConnectionResult> ConnectAsync(
         VpnConnectionRequest request, CancellationToken cancellationToken = default)
     {
@@ -23,7 +25,7 @@ public sealed class VpnConnectionRouter(
                 VpnLinkStatus.Error, $"Protocolo {request.Protocol.DisplayName()} não é suportado por esta build.");
         }
 
-        if (_active is not null && !ReferenceEquals(_active, provider))
+        if (_active is not null)
         {
             await DisconnectAsync(cancellationToken);
         }
@@ -32,7 +34,16 @@ public sealed class VpnConnectionRouter(
             "Conectando via {Protocol} em {Endpoint}", request.Protocol.DisplayName(), request.Endpoint);
 
         var result = await provider.ConnectAsync(request, cancellationToken);
-        _active = result.Success ? provider : null;
+        if (result.Success)
+        {
+            provider.ConnectionLost += OnProviderConnectionLost;
+            _active = provider;
+        }
+        else
+        {
+            _active = null;
+        }
+
         return result;
     }
 
@@ -43,7 +54,16 @@ public sealed class VpnConnectionRouter(
 
         if (active is not null)
         {
+            active.ConnectionLost -= OnProviderConnectionLost;
             await active.DisconnectAsync(cancellationToken);
+        }
+    }
+
+    private void OnProviderConnectionLost(object? sender, VpnConnectionLostEventArgs args)
+    {
+        if (sender is IVpnProvider provider && ReferenceEquals(provider, _active))
+        {
+            ConnectionLost?.Invoke(this, args);
         }
     }
 

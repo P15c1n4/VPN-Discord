@@ -36,9 +36,26 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
     private readonly string _rootDirectory = rootDirectory ?? DEFAULT_ROOT_DIRECTORY;
 
     public OpenVpnProfile Write(
-        string configBase64, string username, string password, string adapterName, int managementPort)
+        string configBase64, string? username, string? password, string adapterName, int managementPort)
     {
         var published = Decode(configBase64);
+        var hasUsername = !string.IsNullOrWhiteSpace(username);
+        var hasPassword = !string.IsNullOrWhiteSpace(password);
+
+        if (hasUsername != hasPassword)
+        {
+            throw new InvalidOperationException(
+                "Para usar credenciais no OpenVPN, informe usuário e senha ou deixe os dois campos vazios.");
+        }
+
+        var hasCredentials = hasUsername && hasPassword;
+
+        if (!hasCredentials && !HasClientAuthenticationMethod(published))
+        {
+            throw new InvalidOperationException(
+                "O perfil OpenVPN não contém certificado/chave do cliente nem usuário/senha. " +
+                "Deixe a autenticação embutida no .ovpn ou informe usuário e senha para este servidor.");
+        }
 
         var sessionDirectory = Path.Combine(_rootDirectory, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(sessionDirectory);
@@ -54,11 +71,15 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
 
         try
         {
-            File.WriteAllText(profile.CredentialsPath, $"{username}\n{password}\n", new UTF8Encoding(false));
+            if (hasCredentials)
+            {
+                File.WriteAllText(profile.CredentialsPath, $"{username}\n{password}\n", new UTF8Encoding(false));
+            }
+
             File.WriteAllText(profile.UpScriptPath, BuildUpScript(profile.TunnelInfoPath), Encoding.ASCII);
             File.WriteAllText(
                 profile.ConfigPath,
-                BuildConfig(published, profile, adapterName, managementPort),
+                BuildConfig(published, profile, adapterName, managementPort, hasCredentials),
                 new UTF8Encoding(false));
         }
         catch
@@ -84,24 +105,34 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
     }
 
     private static string BuildConfig(
-        string published, OpenVpnProfile profile, string adapterName, int managementPort)
+        string published, OpenVpnProfile profile, string adapterName, int managementPort, bool hasCredentials)
     {
+        var normalizedPublished = RemoveAppManagedDirectives(published);
         var builder = new StringBuilder();
         builder.AppendLine("# Gerado por ProxyDiscord. Base: perfil publicado pelo servidor VPN Gate.");
-        builder.AppendLine(published.TrimEnd());
+        builder.AppendLine(normalizedPublished.TrimEnd());
         builder.AppendLine();
         builder.AppendLine("# --- Ajustes do ProxyDiscord -------------------------------------------------");
         builder.AppendLine();
 
         builder.AppendLine("# O tráfego de UM processo é roteado pelo túnel; o resto da máquina não pode ser");
-        builder.AppendLine("# afetado. Sem route-nopull o servidor empurra redirect-gateway e sequestra a rota");
-        builder.AppendLine("# padrão. A rota do túnel é instalada pelo app, com métrica alta.");
-        builder.AppendLine("route-nopull");
+        builder.AppendLine("# afetado. Os filtros aceitam route-gateway/topology do servidor, necessários para");
+        builder.AppendLine("# descobrir o próximo salto, mas bloqueiam rotas e DNS globais. A rota controlada");
+        builder.AppendLine("# do túnel é instalada pelo app, com métrica alta.");
+        builder.AppendLine("pull-filter ignore \"redirect-gateway\"");
+        builder.AppendLine("pull-filter ignore \"redirect-private\"");
+        builder.AppendLine("pull-filter ignore \"route \"");
+        builder.AppendLine("pull-filter ignore \"route-ipv6 \"");
+        builder.AppendLine("pull-filter ignore \"block-outside-dns\"");
+        builder.AppendLine("pull-filter ignore \"dhcp-option DNS\"");
         builder.AppendLine();
 
-        builder.AppendLine("# Credenciais em arquivo: não há console para o OpenVPN pedir usuário e senha.");
-        builder.AppendLine($"auth-user-pass {Quote(profile.CredentialsPath)}");
-        builder.AppendLine();
+        if (hasCredentials)
+        {
+            builder.AppendLine("# Credenciais em arquivo: não há console para o OpenVPN pedir usuário e senha.");
+            builder.AppendLine($"auth-user-pass {Quote(profile.CredentialsPath)}");
+            builder.AppendLine();
+        }
 
         builder.AppendLine("# Adaptador criado por este app, para não disputar adaptador com outro cliente.");
         builder.AppendLine("windows-driver tap-windows6");
@@ -125,6 +156,76 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         builder.AppendLine("connect-retry-max 2");
         builder.AppendLine("resolv-retry 20");
         return builder.ToString();
+    }
+
+    private static readonly HashSet<string> APP_MANAGED_DIRECTIVES = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "auth-user-pass",
+        "block-outside-dns",
+        "dhcp-option",
+        "pull-filter",
+        "redirect-gateway",
+        "redirect-private",
+        "route",
+        "route-ipv6",
+        "route-nopull",
+    };
+
+    private static string RemoveAppManagedDirectives(string config) =>
+        string.Join(
+            "\n",
+            config.Split('\n').Where(raw =>
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
+                {
+                    return true;
+                }
+
+                var separator = line.IndexOfAny([' ', '\t']);
+                var directive = separator < 0 ? line : line[..separator];
+                return !APP_MANAGED_DIRECTIVES.Contains(directive);
+            }));
+
+    private static bool HasClientAuthenticationMethod(string config)
+    {
+        if (HasInlineBlock(config, "cert") && HasInlineBlock(config, "key") ||
+            HasInlineBlock(config, "pkcs12"))
+        {
+            return true;
+        }
+
+        // Profiles obtained from VPN providers sometimes reference certificate files
+        // instead of embedding them. These are accepted here so OpenVPN can report a
+        // precise missing-file error; local profile loading already rejects unsupported
+        // external certificate references before this point.
+        return HasDirectiveWithArgument(config, "cert") && HasDirectiveWithArgument(config, "key") ||
+               HasDirectiveWithArgument(config, "pkcs12") ||
+               HasDirectiveWithArgument(config, "secret");
+    }
+
+    private static bool HasInlineBlock(string config, string directive) =>
+        config.Contains($"<{directive}>", StringComparison.OrdinalIgnoreCase) &&
+        config.Contains($"</{directive}>", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasDirectiveWithArgument(string config, string directive)
+    {
+        foreach (var raw in config.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
+            {
+                continue;
+            }
+
+            if (line.StartsWith(directive + " ", StringComparison.OrdinalIgnoreCase) &&
+                line.Length > directive.Length + 1)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string Quote(string value) => $"\"{value.Replace("\\", "\\\\")}\"";

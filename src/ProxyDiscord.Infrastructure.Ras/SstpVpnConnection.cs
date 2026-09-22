@@ -11,6 +11,12 @@ internal sealed class SstpVpnConnection(
     VpnAdapterLocator adapterLocator,
     ILogger<SstpVpnConnection> logger) : IVpnProvider
 {
+    public event EventHandler<VpnConnectionLostEventArgs>? ConnectionLost
+    {
+        add { }
+        remove { }
+    }
+
     public VpnProtocol Protocol => VpnProtocol.Sstp;
 
     private static readonly TimeSpan CONNECT_TIMEOUT = TimeSpan.FromSeconds(25);
@@ -20,6 +26,13 @@ internal sealed class SstpVpnConnection(
 
     public async Task<VpnConnectionResult> ConnectAsync(VpnConnectionRequest request, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
+        {
+            return VpnConnectionResult.Failed(
+                VpnLinkStatus.Error,
+                "A conexão MS-SSTP exige usuário e senha.");
+        }
+
         var entryName = request.EntryNameHint;
         var serverAddress = BuildServerAddress(request);
 

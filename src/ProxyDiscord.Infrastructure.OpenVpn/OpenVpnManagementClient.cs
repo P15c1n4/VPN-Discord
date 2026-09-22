@@ -15,6 +15,12 @@ internal enum OpenVpnState
     AuthFailed,
 }
 
+internal sealed class OpenVpnStateChangedEventArgs(OpenVpnState state, string? message) : EventArgs
+{
+    public OpenVpnState State { get; } = state;
+    public string? Message { get; } = message;
+}
+
 internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
 {
     private static readonly TimeSpan CONNECT_RETRY_DELAY = TimeSpan.FromMilliseconds(200);
@@ -27,6 +33,8 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
     public OpenVpnState State { get; private set; } = OpenVpnState.Unknown;
 
     public string? LastStateMessage { get; private set; }
+
+    public event EventHandler<OpenVpnStateChangedEventArgs>? StateChanged;
 
     public async Task<bool> ConnectAsync(int port, TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -90,18 +98,56 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
         return State;
     }
 
+    public async Task MonitorAsync(CancellationToken cancellationToken)
+    {
+        if (_reader is not { } reader)
+        {
+            return;
+        }
+
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested && await reader.ReadLineAsync(cancellationToken) is { } line)
+            {
+                HandleLine(line);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (IOException ex)
+        {
+            logger.LogDebug(ex, "A leitura da interface de gerenciamento do OpenVPN foi encerrada.");
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested && State is not OpenVpnState.Exiting)
+            {
+                State = OpenVpnState.Exiting;
+                LastStateMessage = "A interface de gerenciamento do OpenVPN foi encerrada.";
+                StateChanged?.Invoke(
+                    this,
+                    new OpenVpnStateChangedEventArgs(State, LastStateMessage));
+            }
+        }
+    }
+
     private void HandleLine(string line)
     {
         logger.LogDebug("openvpn management: {Line}", line);
 
+        var previousState = State;
+
         if (!line.StartsWith(">STATE:", StringComparison.Ordinal))
         {
-            if (line.StartsWith(">PASSWORD:Verification Failed", StringComparison.OrdinalIgnoreCase))
+            if (line.StartsWith(">PASSWORD:Verification Failed", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith(">PASSWORD:Need 'Auth' username/password", StringComparison.OrdinalIgnoreCase))
             {
                 State = OpenVpnState.AuthFailed;
                 LastStateMessage = line;
             }
 
+            NotifyStateChange(previousState);
             return;
         }
 
@@ -121,6 +167,16 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
                 OpenVpnState.Connecting,
             _ => State,
         };
+
+        NotifyStateChange(previousState);
+    }
+
+    private void NotifyStateChange(OpenVpnState previousState)
+    {
+        if (State != previousState)
+        {
+            StateChanged?.Invoke(this, new OpenVpnStateChangedEventArgs(State, LastStateMessage));
+        }
     }
 
     public async Task RequestShutdownAsync()

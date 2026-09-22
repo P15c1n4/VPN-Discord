@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -24,6 +25,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly BrowseForOpenVpnProfile _browseForOpenVpnProfile;
     private readonly Action _showDiagnostics;
     private readonly ILogger<MainWindowViewModel> _logger;
+    private readonly Dispatcher _dispatcher;
 
     private string? _selectedOpenVpnConfig;
 
@@ -38,6 +40,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         BrowseForExecutable browseForExecutable,
         BrowseForOpenVpnProfile browseForOpenVpnProfile,
         Action showDiagnostics,
+        Dispatcher dispatcher,
         ILogger<MainWindowViewModel> logger)
     {
         _connectVpnUseCase = connectVpnUseCase;
@@ -49,12 +52,13 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _browseForExecutable = browseForExecutable;
         _browseForOpenVpnProfile = browseForOpenVpnProfile;
         _showDiagnostics = showDiagnostics;
+        _dispatcher = dispatcher;
         _logger = logger;
 
         VpnGateList = vpnGateList;
         VpnGateList.ServerSelected += OnVpnGateServerSelected;
 
-        _sessionContext.PropertyChanged += (_, _) => RefreshFromSession();
+        _sessionContext.PropertyChanged += OnSessionPropertyChanged;
         RefreshFromSession();
     }
 
@@ -90,10 +94,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private string _openVpnProfileSource = "";
 
     [ObservableProperty]
-    private string _username = "vpn";
+    private string _username = "";
 
     [ObservableProperty]
-    private string _password = "vpn";
+    private string _password = "";
 
     [ObservableProperty]
     private string _dnsServer = TunnelDnsSettings.GOOGLE_PUBLIC_DNS;
@@ -116,13 +120,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         Status is ConnectionStatus.Idle or ConnectionStatus.Error
         && SelectedProcess is not null
         && !string.IsNullOrWhiteSpace(ServerHost)
-        && !string.IsNullOrWhiteSpace(Username);
+        && (SelectedProtocol != VpnProtocol.Sstp ||
+            (!string.IsNullOrWhiteSpace(Username) && !string.IsNullOrWhiteSpace(Password)));
 
     public bool CanDisconnect => Status is ConnectionStatus.Connecting or ConnectionStatus.Connected;
 
     partial void OnSelectedProcessChanged(ProcessInfo? value) => ConnectCommand.NotifyCanExecuteChanged();
 
     partial void OnUsernameChanged(string value) => ConnectCommand.NotifyCanExecuteChanged();
+
+    partial void OnPasswordChanged(string value) => ConnectCommand.NotifyCanExecuteChanged();
 
     public async Task InitializeAsync()
     {
@@ -185,6 +192,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         _selectedServer = null;
         _selectedOpenVpnConfig = profile.ConfigBase64;
+        Username = "";
+        Password = "";
         OpenVpnProfileSource = $"{profile.FileName} · {profile.Endpoint.Host}:{profile.Endpoint.Port} " +
                                $"({profile.Transport.ToString().ToUpperInvariant()})";
 
@@ -249,11 +258,23 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         await _disconnectVpnUseCase.ExecuteAsync();
     }
 
+    [RelayCommand]
+    private async Task CleanupResourcesAsync()
+    {
+        await _disconnectVpnUseCase.ExecuteAsync();
+    }
+
     private void OnVpnGateServerSelected(VpnGateServerEntry entry)
     {
         _selectedServer = entry;
         _selectedOpenVpnConfig = entry.SupportsOpenVpn ? entry.OpenVpnConfigBase64 : null;
         OpenVpnProfileSource = entry.SupportsOpenVpn ? $"VPN Gate · {entry.HostName}" : "";
+
+        if (entry.SupportsOpenVpn)
+        {
+            Username = "vpn";
+            Password = "vpn";
+        }
 
         Protocols = entry.SupportedProtocols;
         SelectedProtocol = entry.PreferredProtocol;
@@ -262,6 +283,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedProtocolChanged(VpnProtocol value)
     {
+        ConnectCommand.NotifyCanExecuteChanged();
+
         if (_selectedServer is { } entry)
         {
             ApplyEndpointForProtocol(entry, value);
@@ -300,6 +323,25 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void OnSessionPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
+        {
+            return;
+        }
+
+        if (_dispatcher.CheckAccess())
+        {
+            RefreshFromSession();
+            return;
+        }
+
+        // A background cleanup can change the session while OnExit is blocking the UI
+        // thread waiting for it. Queue the notification without waiting, otherwise the
+        // cleanup and the dispatcher would deadlock each other.
+        _dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(RefreshFromSession));
+    }
+
     private void RefreshFromSession()
     {
         Status = _sessionContext.Status;
@@ -318,7 +360,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         DisconnectCommand.NotifyCanExecuteChanged();
     }
 
-    public void Dispose() => VpnGateList.ServerSelected -= OnVpnGateServerSelected;
+    public void Dispose()
+    {
+        VpnGateList.ServerSelected -= OnVpnGateServerSelected;
+        _sessionContext.PropertyChanged -= OnSessionPropertyChanged;
+    }
 }
 
 public sealed record ProcessPickerWindowResult(ProcessInfo Process);

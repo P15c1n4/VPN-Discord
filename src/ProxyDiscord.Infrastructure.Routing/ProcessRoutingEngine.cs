@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Net;
 using Microsoft.Extensions.Logging;
 using ProxyDiscord.Application.Diagnostics;
@@ -32,6 +33,7 @@ public sealed class ProcessRoutingEngine(
     private const int NO_RELAY_PORT = -1;
 
     private readonly int _ownProcessId = Environment.ProcessId;
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
 
     private IWinDivertHandle? _handle;
     private IWinDivertSocketEvents? _socketEvents;
@@ -52,6 +54,24 @@ public sealed class ProcessRoutingEngine(
         TunnelDnsSettings dnsSettings,
         TunnelProtocolScope scope = TunnelProtocolScope.TcpAndUdp,
         CancellationToken cancellationToken = default)
+    {
+        await _lifecycleGate.WaitAsync(cancellationToken);
+        try
+        {
+            await StartCoreAsync(target, vpnAdapter, dnsSettings, scope, cancellationToken);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    private async Task StartCoreAsync(
+        TargetProcessSelector target,
+        VpnAdapterInfo vpnAdapter,
+        TunnelDnsSettings dnsSettings,
+        TunnelProtocolScope scope,
+        CancellationToken cancellationToken)
     {
         if (_running)
         {
@@ -121,14 +141,16 @@ public sealed class ProcessRoutingEngine(
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        if (!_running)
+        await _lifecycleGate.WaitAsync(cancellationToken);
+        try
         {
-            return;
+            await TearDownAsync();
+            logger.LogInformation("Motor de roteamento parado. {Report}", diagnostics.BuildReport());
         }
-
-        await TearDownAsync();
-
-        logger.LogInformation("Motor de roteamento parado. {Report}", diagnostics.BuildReport());
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     // Desfaz tudo o que o Start levanta, na ordem inversa, e é seguro rodar sobre um estado
@@ -140,16 +162,44 @@ public sealed class ProcessRoutingEngine(
     {
         _running = false;
 
-        _handle?.Dispose();
+        try
+        {
+            _handle?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao fechar o handle de rede WinDivert durante a limpeza");
+        }
+
         _handle = null;
-        _socketEvents?.Dispose();
+
+        try
+        {
+            _socketEvents?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao fechar o handle de eventos de socket WinDivert durante a limpeza");
+        }
+
         _socketEvents = null;
 
         foreach (var task in new[] { _captureLoopTask, _socketLoopTask })
         {
             if (task is not null)
             {
-                await task;
+                try
+                {
+                    await task;
+                }
+                catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or Win32Exception)
+                {
+                    logger.LogDebug(ex, "Loop do WinDivert terminou durante a limpeza");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Loop do WinDivert terminou com erro durante a limpeza");
+                }
             }
         }
 
@@ -158,8 +208,24 @@ public sealed class ProcessRoutingEngine(
 
         tcpRelay.TrafficRelayed -= OnTrafficRelayed;
         udpRelay.TrafficRelayed -= OnTrafficRelayed;
-        await tcpRelay.DisposeAsync();
-        await udpRelay.DisposeAsync();
+
+        try
+        {
+            await tcpRelay.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao fechar o relay TCP durante a limpeza");
+        }
+
+        try
+        {
+            await udpRelay.DisposeAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao fechar o relay UDP durante a limpeza");
+        }
 
         _relayPort = NO_RELAY_PORT;
         _udpRelayPort = NO_RELAY_PORT;
@@ -168,7 +234,11 @@ public sealed class ProcessRoutingEngine(
         flows.Clear();
     }
 
-    public async ValueTask DisposeAsync() => await StopAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync();
+        _lifecycleGate.Dispose();
+    }
 
     private void OnTrafficRelayed(object? sender, EventArgs e) => TrafficObserved?.Invoke(this, EventArgs.Empty);
 
