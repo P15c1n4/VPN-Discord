@@ -90,11 +90,11 @@
                         </ComboBox>
                     </StackPanel>
                     <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,8,0">
-                        <TextBlock Text="Usuário" Style="{StaticResource SecondaryTextStyle}"/>
+                        <TextBlock Text="Usuário (obrigatório no SSTP)" Style="{StaticResource SecondaryTextStyle}"/>
                         <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
                     </StackPanel>
                     <StackPanel Grid.Row="1" Grid.Column="2">
-                        <TextBlock Text="Senha" Style="{StaticResource SecondaryTextStyle}"/>
+                        <TextBlock Text="Senha (obrigatória no SSTP)" Style="{StaticResource SecondaryTextStyle}"/>
                         <TextBox Text="{Binding Password, UpdateSourceTrigger=PropertyChanged}"/>
                     </StackPanel>
                 </Grid>
@@ -215,6 +215,7 @@
                        ToolTip="{Binding ErrorMessage}" Margin="0,0,12,0"/>
             <StackPanel Grid.Column="1" Orientation="Horizontal">
                 <Button Content="Diagnóstico..." Command="{Binding OpenDiagnosticsCommand}" Margin="0,0,8,0"/>
+                <Button Content="Liberar recursos" Command="{Binding CleanupResourcesCommand}" ToolTip="Fecha WinDivert, relays, rota e VPN" Margin="0,0,8,0"/>
                 <Button Content="Desconectar" Command="{Binding DisconnectCommand}" Margin="0,0,8,0"/>
                 <Button Content="Conectar" Command="{Binding ConnectCommand}" Style="{StaticResource PrimaryButtonStyle}"/>
             </StackPanel>

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Net.Security;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using ProxyDiscord.Application.Diagnostics;
@@ -13,22 +14,27 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
 {
     private static readonly TimeSpan PROBE_TIMEOUT = TimeSpan.FromSeconds(8);
 
-    private static readonly (string Host, string Path)[] PUBLIC_IP_ENDPOINTS =
+    private static readonly (string Host, int Port, string Path, bool UseTls)[] PUBLIC_IP_ENDPOINTS =
     [
-        ("ifconfig.me", "/ip"),
-        ("api.ipify.org", "/"),
-        ("icanhazip.com", "/"),
+        ("ifconfig.me", 443, "/ip", true),
+        ("api.ipify.org", 443, "/", true),
+        ("icanhazip.com", 443, "/", true),
+        ("ifconfig.me", 80, "/ip", false),
+        ("api.ipify.org", 80, "/", false),
+        ("icanhazip.com", 80, "/", false),
     ];
 
     private static readonly IPAddress DNS_PROBE_SERVER = IPAddress.Parse("8.8.8.8");
 
     public async Task<EgressSelfTestResult> RunAsync(
-        VpnAdapterInfo adapter, CancellationToken cancellationToken = default)
+        VpnAdapterInfo adapter,
+        OutboundInterfaceInfo? directInterface = null,
+        CancellationToken cancellationToken = default)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(PROBE_TIMEOUT * 3);
 
-        var result = await ProbeAsync(adapter, timeout.Token);
+        var result = await ProbeAsync(adapter, directInterface, timeout.Token);
         diagnostics.SelfTestCompleted(result);
 
         if (result.Success)
@@ -43,56 +49,77 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         return result;
     }
 
-    private async Task<EgressSelfTestResult> ProbeAsync(VpnAdapterInfo adapter, CancellationToken cancellationToken)
+    private async Task<EgressSelfTestResult> ProbeAsync(
+        VpnAdapterInfo adapter,
+        OutboundInterfaceInfo? directInterface,
+        CancellationToken cancellationToken)
     {
-        string? throughVpn;
-        try
-        {
-            throughVpn = await GetPublicIpAsync(adapter, cancellationToken);
-        }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.NetworkUnreachable)
+        var vpnProbe = await GetPublicIpAsync(
+            socketFactory: () => VpnBoundSocketFactory.CreateTcpSocket(adapter),
+            bindingDescription: $"VPN if {adapter.InterfaceIndex} ({adapter.LocalIp})",
+            cancellationToken);
+
+        if (vpnProbe.Ip is null)
         {
             return new EgressSelfTestResult(
                 false,
-                $"a interface VPN {adapter.InterfaceIndex} não tem rota para a internet (NetworkUnreachable). " +
-                "A rota do túnel não foi instalada — nenhum tráfego passaria pela VPN.");
-        }
-        catch (Exception ex)
-        {
-            return new EgressSelfTestResult(false, $"não foi possível sair pela VPN: {ex.Message}");
-        }
-
-        if (throughVpn is null)
-        {
-            return new EgressSelfTestResult(
-                false, "nenhum serviço de IP público respondeu pela VPN; a saída do túnel não pôde ser confirmada.");
+                $"nenhum serviço de IP público respondeu pela VPN; a saída do túnel não pôde ser confirmada. " +
+                vpnProbe.Details);
         }
 
         var udpWorks = await TryDnsThroughVpnAsync(adapter, cancellationToken);
-        var direct = await TryGetPublicIpDirectAsync(cancellationToken);
+        PublicIpProbeResult directProbe = new(null, "consulta direta não executada");
 
-        if (direct is not null && string.Equals(direct, throughVpn, StringComparison.OrdinalIgnoreCase))
+        if (directInterface is not null)
+        try
         {
-            return new EgressSelfTestResult(
-                false,
-                $"o IP público pela VPN ({throughVpn}) é igual ao da conexão direta — o tráfego não está saindo pelo túnel.",
-                throughVpn, direct, udpWorks);
+            directProbe = await GetPublicIpAsync(
+                socketFactory: () => VpnBoundSocketFactory.CreateTcpSocket(directInterface),
+                bindingDescription: $"direto if {directInterface.InterfaceIndex} ({directInterface.LocalIp})",
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            directProbe = new PublicIpProbeResult(null, $"falha inesperada: {ex.Message}");
+        }
+
+        var directIp = directProbe.Ip;
+        var comparisonNote = directInterface is null
+            ? "interface física não identificada; comparação direta ignorada"
+            : directIp is null
+                ? $"consulta direta sem resposta ({directProbe.Details})"
+                : string.Equals(directIp, vpnProbe.Ip, StringComparison.OrdinalIgnoreCase)
+                    ? $"aviso: o IP direto e o IP da VPN coincidiram ({vpnProbe.Ip}); isso não reprova o túnel"
+                    : $"IP direto diferente ({directIp})";
+
+        if (directIp is not null && string.Equals(directIp, vpnProbe.Ip, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogWarning(
+                "O IP público direto e o IP pela VPN coincidiram ({Ip}). O autoteste continuará aprovado porque " +
+                "a consulta VPN foi presa à interface {VpnIfIdx}.",
+                vpnProbe.Ip, adapter.InterfaceIndex);
         }
 
         var udpNote = udpWorks ? "UDP ok" : "UDP sem resposta";
         return new EgressSelfTestResult(
             true,
-            $"IP público pela VPN {throughVpn} (direto {direct ?? "desconhecido"}), TCP ok, {udpNote}.",
-            throughVpn, direct, udpWorks);
+            $"IP público pela VPN {vpnProbe.Ip} (direto {directIp ?? "desconhecido"}), TCP ok, {udpNote}; " +
+            comparisonNote,
+            vpnProbe.Ip, directIp, udpWorks);
     }
 
-    private static async Task<string?> GetPublicIpAsync(VpnAdapterInfo adapter, CancellationToken cancellationToken)
+    private static async Task<PublicIpProbeResult> GetPublicIpAsync(
+        Func<Socket> socketFactory,
+        string bindingDescription,
+        CancellationToken cancellationToken)
     {
-        foreach (var (host, path) in PUBLIC_IP_ENDPOINTS)
+        var failures = new List<string>();
+
+        foreach (var (host, port, path, useTls) in PUBLIC_IP_ENDPOINTS)
         {
             try
             {
-                using var socket = VpnBoundSocketFactory.CreateTcpSocket(adapter);
+                using var socket = socketFactory();
                 var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken);
                 var target = Array.Find(addresses, a => a.AddressFamily == AddressFamily.InterNetwork);
                 if (target is null)
@@ -100,61 +127,44 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
                     continue;
                 }
 
-                await socket.ConnectAsync(new IPEndPoint(target, 80), cancellationToken);
+                await socket.ConnectAsync(new IPEndPoint(target, port), cancellationToken);
+                await using var networkStream = new NetworkStream(socket, ownsSocket: false);
+                using var tls = useTls
+                    ? new SslStream(networkStream, leaveInnerStreamOpen: true)
+                    : null;
+                Stream stream = tls is null ? networkStream : tls;
+                if (tls is not null)
+                {
+                    await tls.AuthenticateAsClientAsync(
+                        new SslClientAuthenticationOptions { TargetHost = host },
+                        cancellationToken);
+                }
+
                 var request = Encoding.ASCII.GetBytes(
                     $"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/8\r\nConnection: close\r\n\r\n");
-                await socket.SendAsync(request, SocketFlags.None, cancellationToken);
+                await stream.WriteAsync(request, cancellationToken);
 
-                var response = await ReadAllAsync(socket, cancellationToken);
+                var response = await ReadAllAsync(stream, cancellationToken);
                 var body = ExtractBody(response);
                 if (IPAddress.TryParse(body, out var parsed))
                 {
-                    return parsed.ToString();
+                    return new PublicIpProbeResult(parsed.ToString(),
+                        $"{bindingDescription} respondeu via {host}:{port}");
                 }
+
+                failures.Add($"{host}:{port}: resposta sem IP público");
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.NetworkUnreachable)
             {
-                throw;
+                failures.Add($"{host}:{port}: NetworkUnreachable");
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                failures.Add($"{host}:{port}: {ex.GetType().Name}: {ex.Message}");
             }
         }
 
-        return null;
-    }
-
-    private static async Task<string?> TryGetPublicIpDirectAsync(CancellationToken cancellationToken)
-    {
-        foreach (var (host, path) in PUBLIC_IP_ENDPOINTS)
-        {
-            try
-            {
-                using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-                var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken);
-                var target = Array.Find(addresses, a => a.AddressFamily == AddressFamily.InterNetwork);
-                if (target is null)
-                {
-                    continue;
-                }
-
-                await socket.ConnectAsync(new IPEndPoint(target, 80), cancellationToken);
-                var request = Encoding.ASCII.GetBytes(
-                    $"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/8\r\nConnection: close\r\n\r\n");
-                await socket.SendAsync(request, SocketFlags.None, cancellationToken);
-
-                var body = ExtractBody(await ReadAllAsync(socket, cancellationToken));
-                if (IPAddress.TryParse(body, out var parsed))
-                {
-                    return parsed.ToString();
-                }
-            }
-            catch
-            {
-            }
-        }
-
-        return null;
+        return new PublicIpProbeResult(null, string.Join("; ", failures));
     }
 
     private async Task<bool> TryDnsThroughVpnAsync(VpnAdapterInfo adapter, CancellationToken cancellationToken)
@@ -209,7 +219,7 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         return query;
     }
 
-    private static async Task<string> ReadAllAsync(Socket socket, CancellationToken cancellationToken)
+    private static async Task<string> ReadAllAsync(Stream stream, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(PROBE_TIMEOUT);
@@ -218,7 +228,7 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         var builder = new StringBuilder();
         while (builder.Length < 16 * 1024)
         {
-            var read = await socket.ReceiveAsync(buffer, SocketFlags.None, timeout.Token);
+            var read = await stream.ReadAsync(buffer, timeout.Token);
             if (read == 0)
             {
                 break;
@@ -235,4 +245,6 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         var separator = response.IndexOf("\r\n\r\n", StringComparison.Ordinal);
         return separator < 0 ? string.Empty : response[(separator + 4)..].Trim();
     }
+
+    private sealed record PublicIpProbeResult(string? Ip, string Details);
 }

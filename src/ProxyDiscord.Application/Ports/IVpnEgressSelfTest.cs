@@ -5,5 +5,8 @@ namespace ProxyDiscord.Application.Ports;
 
 public interface IVpnEgressSelfTest
 {
-    Task<EgressSelfTestResult> RunAsync(VpnAdapterInfo adapter, CancellationToken cancellationToken = default);
+    Task<EgressSelfTestResult> RunAsync(
+        VpnAdapterInfo adapter,
+        OutboundInterfaceInfo? directInterface = null,
+        CancellationToken cancellationToken = default);
 }

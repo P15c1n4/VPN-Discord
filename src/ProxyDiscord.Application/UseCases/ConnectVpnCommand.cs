@@ -7,8 +7,8 @@ public sealed record ConnectVpnCommand(
     ProcessInfo TargetProcess,
     string ServerAddressRaw,
     VpnProtocol Protocol,
-    string Username,
-    string Password,
+    string? Username,
+    string? Password,
     string? OpenVpnConfigBase64 = null,
     Dtos.TunnelDnsSettings? Dns = null,
     TunnelProtocolScope ProtocolScope = TunnelProtocolScope.TcpAndUdp)

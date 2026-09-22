@@ -12,6 +12,7 @@ public sealed class ConnectVpnUseCase(
     IProcessRoutingEngine routingEngine,
     IVpnRouteManager routeManager,
     IVpnEgressSelfTest egressSelfTest,
+    IOutboundInterfaceResolver outboundInterfaceResolver,
     IConnectionStateStore stateStore,
     IProcessLivenessChecker livenessChecker,
     ISystemClock clock,
@@ -45,6 +46,10 @@ public sealed class ConnectVpnUseCase(
             command.Password,
             entryName,
             command.OpenVpnConfigBase64);
+
+        // Captura antes de discar: o OpenVPN pode alterar as rotas assim que o túnel sobe.
+        // A consulta direta do auto-teste precisa continuar presa à interface física original.
+        var directInterface = await outboundInterfaceResolver.CapturePhysicalInterfaceAsync(cancellationToken);
 
         VpnConnectionResult connectResult;
         try
@@ -88,7 +93,7 @@ public sealed class ConnectVpnUseCase(
             return VpnConnectionResult.Failed(VpnLinkStatus.Error, ex.Message);
         }
 
-        var selfTest = await egressSelfTest.RunAsync(adapter, cancellationToken);
+        var selfTest = await egressSelfTest.RunAsync(adapter, directInterface, cancellationToken);
         if (!selfTest.Success)
         {
             var error = $"A VPN conectou, mas o tráfego não sai por ela: {selfTest.Summary}";

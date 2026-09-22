@@ -55,6 +55,7 @@ internal static class CompositionRoot
         services.AddSingleton<ConnectVpnUseCase>();
         services.AddSingleton<LoadOpenVpnProfileUseCase>();
         services.AddSingleton<DisconnectVpnUseCase>();
+        services.AddSingleton<VpnConnectionSupervisor>();
         services.AddSingleton<CleanupStaleStateOnStartupUseCase>();
 
         services.AddSingleton<VpnGateListViewModel>();
@@ -69,7 +70,9 @@ internal static class CompositionRoot
         services.AddSingleton<BrowseForOpenVpnProfile>(_ => PickOpenVpnProfile);
         services.AddSingleton<Action>(sp => () => ShowDiagnostics(sp));
 
-        return services.BuildServiceProvider();
+        var provider = services.BuildServiceProvider();
+        _ = provider.GetRequiredService<VpnConnectionSupervisor>();
+        return provider;
     }
 
     private static void ShowDiagnostics(IServiceProvider serviceProvider)

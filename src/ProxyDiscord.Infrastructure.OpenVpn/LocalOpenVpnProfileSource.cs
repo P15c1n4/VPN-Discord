@@ -1,4 +1,5 @@
 using System.Text;
+using System.Net;
 using ProxyDiscord.Application.Dtos;
 using ProxyDiscord.Application.Ports;
 using ProxyDiscord.Application.Vpn;
@@ -30,6 +31,13 @@ public sealed class LocalOpenVpnProfileSource : IOpenVpnProfileSource
 
         if (OpenVpnRemoteParser.TryParse(config) is not { } remote)
         {
+            if (FindBareIpEndpoint(config) is { } bareEndpoint)
+            {
+                throw new InvalidOperationException(
+                    $"A linha '{bareEndpoint}' está sem a diretiva 'remote'. " +
+                    $"Use 'remote {bareEndpoint}' no perfil OpenVPN.");
+            }
+
             throw new InvalidOperationException(
                 "O arquivo não contém uma diretiva 'remote' válida; não é um perfil OpenVPN de cliente.");
         }
@@ -73,6 +81,29 @@ public sealed class LocalOpenVpnProfileSource : IOpenVpnProfileSource
                 {
                     return directive;
                 }
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindBareIpEndpoint(string config)
+    {
+        foreach (var raw in config.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
+            {
+                continue;
+            }
+
+            var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length is 2 or 3 &&
+                IPAddress.TryParse(parts[0], out _) &&
+                int.TryParse(parts[1], out var port) &&
+                port is > 0 and <= 65535)
+            {
+                return line;
             }
         }
 

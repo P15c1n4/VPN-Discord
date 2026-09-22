@@ -4,6 +4,8 @@ namespace ProxyDiscord.Application.Ports;
 
 public interface IVpnConnection
 {
+    event EventHandler<VpnConnectionLostEventArgs>? ConnectionLost;
+
     Task<VpnConnectionResult> ConnectAsync(VpnConnectionRequest request, CancellationToken cancellationToken = default);
 
     Task DisconnectAsync(CancellationToken cancellationToken = default);

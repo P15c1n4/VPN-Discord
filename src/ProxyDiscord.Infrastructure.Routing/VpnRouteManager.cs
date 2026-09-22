@@ -136,7 +136,9 @@ public sealed class VpnRouteManager(ILogger<VpnRouteManager> logger) : IVpnRoute
         if (string.IsNullOrWhiteSpace(adapter.GatewayIp) ||
             !IPAddress.TryParse(adapter.GatewayIp, out var gateway))
         {
-            return IPAddress.Any;
+            throw new InvalidOperationException(
+                $"A interface VPN {adapter.InterfaceIndex} não informou um gateway IPv4 utilizável; " +
+                "a rota do túnel não será instalada via 0.0.0.0.");
         }
 
         logger.LogDebug("Usando gateway {Gateway} anunciado pela VPN como next hop.", gateway);
