@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -289,13 +290,46 @@ internal sealed class OpenVpnConnection(
 
         var gateway = FirstUsableAddress(
             tunnel.GetValueOrDefault("route_vpn_gateway"),
-            tunnel.GetValueOrDefault("ifconfig_remote"));
+            tunnel.GetValueOrDefault("ifconfig_remote"),
+            SubnetTopologyGateway(localIp, tunnel.GetValueOrDefault("ifconfig_netmask")));
 
         return new VpnAdapterInfo(
             localIp,
             (uint)properties.GetIPv4Properties().Index,
             SubInterfaceIndex: 0,
             gateway);
+    }
+
+    // Com 'topology subnet' e route-nopull, o OpenVPN não publica route_vpn_gateway (só o faz
+    // quando há rotas a instalar) e ifconfig_remote vem vazio. Sem next hop, a rota do túnel
+    // vira on-link e, no TAP em modo TUN, nenhum pacote sai. Um servidor OpenVPN ('server')
+    // sempre ocupa o primeiro endereço da sub-rede, então esse é o gateway.
+    private static string? SubnetTopologyGateway(string localIp, string? netmask)
+    {
+        if (!IPAddress.TryParse(localIp, out var local) || local.AddressFamily != AddressFamily.InterNetwork ||
+            !IPAddress.TryParse(netmask, out var mask) || mask.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return null;
+        }
+
+        var localBits = BinaryPrimitives.ReadUInt32BigEndian(local.GetAddressBytes());
+        var maskBits = BinaryPrimitives.ReadUInt32BigEndian(mask.GetAddressBytes());
+
+        // /31 e /32 não têm "primeiro host" separado do endereço local.
+        if (maskBits is 0 or >= 0xFFFFFFFE)
+        {
+            return null;
+        }
+
+        var first = (localBits & maskBits) + 1;
+        if (first == localBits)
+        {
+            return null;
+        }
+
+        var bytes = new byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(bytes, first);
+        return new IPAddress(bytes).ToString();
     }
 
     private static string? FirstUsableAddress(params string?[] candidates) =>
