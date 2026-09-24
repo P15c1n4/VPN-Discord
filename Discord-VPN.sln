@@ -27,6 +27,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Infrastructure
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Presentation.Wpf", "src\ProxyDiscord.Presentation.Wpf\ProxyDiscord.Presentation.Wpf.csproj", "{35B1EF24-C50A-4309-9D23-B7A57DFC3928}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProxyDiscord.Application.Tests", "tests\ProxyDiscord.Application.Tests\ProxyDiscord.Application.Tests.csproj", "{E5348742-47E3-4B35-9DCF-55B29A6B1234}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -80,6 +82,10 @@ Global
 		{35B1EF24-C50A-4309-9D23-B7A57DFC3928}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{35B1EF24-C50A-4309-9D23-B7A57DFC3928}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{35B1EF24-C50A-4309-9D23-B7A57DFC3928}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E5348742-47E3-4B35-9DCF-55B29A6B1234}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5348742-47E3-4B35-9DCF-55B29A6B1234}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5348742-47E3-4B35-9DCF-55B29A6B1234}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5348742-47E3-4B35-9DCF-55B29A6B1234}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{CEB7109F-6E58-4698-8528-4316F852C27C} = {A3ED933B-B048-4C2B-B37D-852461237151}

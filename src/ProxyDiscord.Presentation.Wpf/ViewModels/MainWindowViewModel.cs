@@ -33,6 +33,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly Action _showDiagnostics;
     private readonly ILogger<MainWindowViewModel> _logger;
     private readonly Dispatcher _dispatcher;
+    private readonly DispatcherTimer _executableResolutionTimer;
 
     private string? _selectedOpenVpnConfig;
     private bool _applyingCredentials;
@@ -45,6 +46,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool _credentialsWereLoadedFromStore;
     private OpenVpnAuthenticationInfo? _localProfileAuthentication;
     private bool _isLocalOpenVpnProfile;
+    private bool _isResolvingExecutable;
     [ObservableProperty]
     private bool _isCheckingForUpdates;
 
@@ -87,6 +89,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _showDiagnostics = showDiagnostics;
         _dispatcher = dispatcher;
         _logger = logger;
+        _executableResolutionTimer = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _executableResolutionTimer.Tick += async (_, _) => await ResolveSelectedExecutableAsync();
 
         VpnGateList = vpnGateList;
         VpnGateList.ServerSelected += OnVpnGateServerSelected;
@@ -134,6 +141,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _saveCredentialsEnabled;
+
+    [ObservableProperty]
+    private bool _savePasswordAfterConnectionEnabled;
 
     [ObservableProperty]
     private string _dnsServer = TunnelDnsSettings.GOOGLE_PUBLIC_DNS;
@@ -264,7 +274,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         try
         {
-            SaveCredentialsEnabled = (await _savedCredentialsUseCase.ReadConfigurationAsync()).SaveCredentialsEnabled;
+            var configuration = await _savedCredentialsUseCase.ReadConfigurationAsync();
+            SaveCredentialsEnabled = configuration.SaveCredentialsEnabled;
+            SavePasswordAfterConnectionEnabled = configuration.SavePasswordAfterConnectionEnabled;
         }
         catch (Exception ex)
         {
@@ -310,6 +322,11 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         var name = Path.GetFileNameWithoutExtension(path);
         await ApplyTargetAsync(new ProcessInfo(0, name, path), $"{Path.GetFileName(path)} (aguardando o processo iniciar)");
+        await ResolveSelectedExecutableAsync();
+        if (SelectedProcess is { Pid: 0 })
+        {
+            _executableResolutionTimer.Start();
+        }
     }
 
     [RelayCommand]
@@ -361,7 +378,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         try
         {
-            await _savedCredentialsUseCase.WriteConfigurationAsync(new UserConfiguration(enabled));
+            await _savedCredentialsUseCase.WriteConfigurationAsync(
+                new UserConfiguration(enabled, SavePasswordAfterConnectionEnabled));
         }
         catch (Exception ex)
         {
@@ -398,6 +416,30 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             }
 
             _credentialsWereLoadedFromStore = false;
+        }
+    }
+
+    public async Task SetSavePasswordAfterConnectionEnabledAsync(bool enabled)
+    {
+        var previousValue = SavePasswordAfterConnectionEnabled;
+        SavePasswordAfterConnectionEnabled = enabled;
+
+        try
+        {
+            await _savedCredentialsUseCase.WriteConfigurationAsync(
+                new UserConfiguration(SaveCredentialsEnabled, enabled));
+        }
+        catch (Exception ex)
+        {
+            SavePasswordAfterConnectionEnabled = previousValue;
+            ErrorMessage = "Não foi possível salvar as configurações. Tente novamente.";
+            _logger.LogWarning(ex, "Falha ao salvar preferência de senha após conexão");
+            return;
+        }
+
+        if (!enabled && _credentialsWereLoadedFromStore && !_passwordWasManuallyEntered)
+        {
+            SetPasswordWithoutMarkingManual("");
         }
     }
 
@@ -484,6 +526,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private async Task ApplyTargetAsync(ProcessInfo process, string display)
     {
+        _executableResolutionTimer.Stop();
         if (CanDisconnect)
         {
             await _disconnectVpnUseCase.ExecuteAsync();
@@ -491,6 +534,58 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         SelectedProcess = process;
         SelectedProcessDisplay = display;
+    }
+
+    private async Task ResolveSelectedExecutableAsync()
+    {
+        if (_isResolvingExecutable || SelectedProcess is not { Pid: 0, ExecutablePath: { Length: > 0 } executablePath })
+        {
+            return;
+        }
+
+        _isResolvingExecutable = true;
+        try
+        {
+            var processes = await _discoverProcessesUseCase.ExecuteAsync();
+            var process = processes.FirstOrDefault(candidate =>
+                candidate.Pid > 0 && PathsEqual(candidate.ExecutablePath, executablePath));
+
+            if (process is null ||
+                SelectedProcess is not { Pid: 0, ExecutablePath: { } currentPath } ||
+                !PathsEqual(currentPath, executablePath))
+            {
+                return;
+            }
+
+            SelectedProcess = process;
+            SelectedProcessDisplay = $"{process.Name} (PID {process.Pid})";
+            _executableResolutionTimer.Stop();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Falha ao verificar se o executável selecionado iniciou");
+        }
+        finally
+        {
+            _isResolvingExecutable = false;
+        }
+    }
+
+    private static bool PathsEqual(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanConnect))]
@@ -659,6 +754,22 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void SetPasswordWithoutMarkingManual(string password)
+    {
+        _applyingCredentials = true;
+        try
+        {
+            Password = password;
+            _passwordWasManuallyEntered = false;
+            _manualPasswordServerKey = null;
+            _manualPasswordValue = null;
+        }
+        finally
+        {
+            _applyingCredentials = false;
+        }
+    }
+
     private string? CreateCredentialServerKey()
     {
         if (string.IsNullOrWhiteSpace(ServerHost) ||
@@ -688,7 +799,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             await _savedCredentialsUseCase.SaveAfterSuccessfulConnectionAsync(
-                serverKey, Username, manualPassword);
+                serverKey, Username, manualPassword, connectionSucceeded: true);
         }
         catch (Exception ex)
         {
@@ -756,6 +867,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _executableResolutionTimer.Stop();
         VpnGateList.ServerSelected -= OnVpnGateServerSelected;
         _sessionContext.PropertyChanged -= OnSessionPropertyChanged;
     }

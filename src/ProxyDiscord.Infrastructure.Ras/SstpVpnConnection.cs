@@ -49,28 +49,49 @@ internal sealed class SstpVpnConnection(
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao criar a entrada de VPN '{Entry}'", entryName);
+            await CleanupEntryAsync(entryName, CancellationToken.None);
             return VpnConnectionResult.Failed(VpnLinkStatus.Error, $"Não foi possível configurar a conexão MS-SSTP. Detalhes: {ex.Message}");
         }
 
-        var dialed = await rasDial.DialAsync(entryName, request.Username, request.Password, cancellationToken);
-        if (!dialed)
+        var connectionTransferred = false;
+        try
         {
-            await CleanupEntryAsync(entryName, CancellationToken.None);
-            return VpnConnectionResult.Failed(
-                VpnLinkStatus.Error,
-                "O Windows não conseguiu conectar por MS-SSTP. Confira o servidor, a porta e as credenciais.");
-        }
+            var dialed = await rasDial.DialAsync(entryName, request.Username, request.Password, cancellationToken);
+            if (!dialed)
+            {
+                return VpnConnectionResult.Failed(
+                    VpnLinkStatus.Error,
+                    "O Windows não conseguiu conectar por MS-SSTP. Confira o servidor, a porta e as credenciais.");
+            }
 
-        var connected = await WaitUntilUpAsync(entryName, cancellationToken);
-        if (!connected)
+            var connected = await WaitUntilUpAsync(entryName, cancellationToken);
+            if (!connected)
+            {
+                return VpnConnectionResult.Failed(
+                    VpnLinkStatus.Error,
+                    "A conexão foi iniciada, mas a interface de rede não ficou pronta a tempo.");
+            }
+
+            _activeEntryName = entryName;
+            connectionTransferred = true;
+            return VpnConnectionResult.Ok(VpnLinkStatus.Connected);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await rasDial.HangUpAsync(entryName, CancellationToken.None);
-            await CleanupEntryAsync(entryName, CancellationToken.None);
-            return VpnConnectionResult.Failed(VpnLinkStatus.Error, "A conexão foi iniciada, mas a interface de rede não ficou pronta a tempo.");
+            return VpnConnectionResult.Failed(VpnLinkStatus.Disconnected, "A tentativa de conexão MS-SSTP foi cancelada.");
         }
-
-        _activeEntryName = entryName;
-        return VpnConnectionResult.Ok(VpnLinkStatus.Connected);
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Falha durante a discagem MS-SSTP para '{Entry}'", entryName);
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, $"Não foi possível conectar por MS-SSTP. Detalhes: {ex.Message}");
+        }
+        finally
+        {
+            if (!connectionTransferred)
+            {
+                await HangUpAndCleanupEntryAsync(entryName);
+            }
+        }
     }
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
@@ -145,5 +166,19 @@ internal sealed class SstpVpnConnection(
         {
             logger.LogWarning(ex, "Falha ao remover a entrada de VPN temporária '{Entry}'", entryName);
         }
+    }
+
+    private async Task HangUpAndCleanupEntryAsync(string entryName)
+    {
+        try
+        {
+            await rasDial.HangUpAsync(entryName, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao encerrar a discagem MS-SSTP incompleta '{Entry}'", entryName);
+        }
+
+        await CleanupEntryAsync(entryName, CancellationToken.None);
     }
 }

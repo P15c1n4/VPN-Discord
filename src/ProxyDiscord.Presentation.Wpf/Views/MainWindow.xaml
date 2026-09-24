@@ -18,6 +18,11 @@
                           IsCheckable="True"
                           IsChecked="{Binding SaveCredentialsEnabled, Mode=OneWay}"
                           Click="SaveCredentials_Click"/>
+                <MenuItem Header="Salvar senha após conexão"
+                          IsCheckable="True"
+                          IsEnabled="{Binding SaveCredentialsEnabled}"
+                          IsChecked="{Binding SavePasswordAfterConnectionEnabled, Mode=OneWay}"
+                          Click="SavePasswordAfterConnection_Click"/>
                 <Separator/>
                 <MenuItem Header="Verificar atualizações"
                           Command="{Binding CheckForUpdatesCommand}"/>
@@ -43,7 +48,9 @@
                 <StackPanel Grid.Column="0" Orientation="Vertical">
                     <TextBlock Text="Aplicativo monitorado" Style="{StaticResource SecondaryTextStyle}"/>
                     <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                        <TextBlock Text="{Binding SelectedProcessDisplay}" FontWeight="SemiBold" FontSize="15" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding SelectedProcessDisplay}" FontWeight="SemiBold" FontSize="15"
+                                   VerticalAlignment="Center" MaxWidth="250" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding SelectedProcessDisplay}"/>
                         <Button Content="Escolher processo" Command="{Binding OpenProcessPickerCommand}" Margin="12,0,0,0"/>
                         <Button Content="Escolher executável" Command="{Binding BrowseForExecutableCommand}" Margin="6,0,0,0"/>
                     </StackPanel>

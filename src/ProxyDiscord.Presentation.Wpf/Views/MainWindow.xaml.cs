@@ -18,6 +18,7 @@ public partial class MainWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         InitializeComponent();
+        DataObject.AddPastingHandler(PasswordInput, PasswordInput_Pasting);
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
 
         if (AppIcons.TryLoadAppIcon() is { } icon)
@@ -81,6 +82,14 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void SavePasswordAfterConnection_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { IsChecked: var enabled })
+        {
+            await _viewModel.SetSavePasswordAfterConnectionEnabledAsync(enabled);
+        }
+    }
+
     private async void ServerIdentity_LostFocus(object sender, RoutedEventArgs e) =>
         await _viewModel.LoadSavedCredentialsForCurrentServerAsync();
 
@@ -99,6 +108,8 @@ public partial class MainWindow : Window
             _viewModel.SetPasswordFromUser(PasswordInput.Password);
         }
     }
+
+    private void PasswordInput_Pasting(object sender, DataObjectPastingEventArgs e) => PasswordInput.SelectAll();
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

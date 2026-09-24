@@ -20,17 +20,29 @@ public sealed class SavedCredentialsUseCase(
         CancellationToken cancellationToken = default)
     {
         var configuration = await configurationStore.ReadAsync(cancellationToken);
-        return configuration.SaveCredentialsEnabled
-            ? await credentialsStore.FindAsync(serverKey, cancellationToken)
-            : null;
+        if (!configuration.SaveCredentialsEnabled)
+        {
+            return null;
+        }
+
+        var credentials = await credentialsStore.FindAsync(serverKey, cancellationToken);
+        return credentials is null || configuration.SavePasswordAfterConnectionEnabled
+            ? credentials
+            : credentials with { Password = null };
     }
 
     public async Task SaveAfterSuccessfulConnectionAsync(
         string serverKey,
         string username,
         string? manuallyEnteredPassword,
+        bool connectionSucceeded,
         CancellationToken cancellationToken = default)
     {
+        if (!connectionSucceeded)
+        {
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(username) && string.IsNullOrEmpty(manuallyEnteredPassword))
         {
             return;
@@ -45,7 +57,7 @@ public sealed class SavedCredentialsUseCase(
         await credentialsStore.SaveAsync(
             serverKey,
             username,
-            manuallyEnteredPassword,
+            configuration.SavePasswordAfterConnectionEnabled ? manuallyEnteredPassword : null,
             cancellationToken);
     }
 }
