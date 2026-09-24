@@ -75,7 +75,7 @@ public sealed class ProcessRoutingEngine(
     {
         if (_running)
         {
-            throw new InvalidOperationException("O motor de roteamento já está em execução.");
+            throw new InvalidOperationException("O roteamento por processo já está ativo.");
         }
 
         _scope = scope;
@@ -112,7 +112,7 @@ public sealed class ProcessRoutingEngine(
             if (_relayPort == _udpRelayPort)
             {
                 throw new InvalidOperationException(
-                    $"Os relays TCP e UDP receberam a mesma porta ({_relayPort}); impossível distinguir os fluxos.");
+                    $"Os relays TCP e UDP receberam a mesma porta ({_relayPort}). Não foi possível distinguir os fluxos.");
             }
 
             _socketEvents = handleFactory.OpenSocketEvents(SOCKET_EVENT_FILTER);
@@ -127,7 +127,7 @@ public sealed class ProcessRoutingEngine(
             // Um Start que falha no meio já subiu relay, watcher ou handle. Sem isto eles ficariam
             // vivos com _running == false — invisíveis para o StopAsync e vazados de vez, já que a
             // tentativa seguinte sobrescreveria os campos e perderia os sockets antigos.
-            await TearDownAsync();
+            await TearDownAsync(unloadWinDivertDriver: false);
             throw;
         }
 
@@ -144,7 +144,7 @@ public sealed class ProcessRoutingEngine(
         await _lifecycleGate.WaitAsync(cancellationToken);
         try
         {
-            await TearDownAsync();
+            await TearDownAsync(unloadWinDivertDriver: true);
             logger.LogInformation("Motor de roteamento parado. {Report}", diagnostics.BuildReport());
         }
         finally
@@ -158,7 +158,7 @@ public sealed class ProcessRoutingEngine(
     // incondicional de propósito — o relay fora de escopo nunca foi iniciado e o Dispose dele
     // retorna na hora, enquanto uma desinscrição condicional deixaria handler pendurado se o
     // Start tivesse falhado entre o += e o Start do relay.
-    private async Task TearDownAsync()
+    private async Task TearDownAsync(bool unloadWinDivertDriver)
     {
         _running = false;
 
@@ -225,6 +225,26 @@ public sealed class ProcessRoutingEngine(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Falha ao fechar o relay UDP durante a limpeza");
+        }
+
+        if (unloadWinDivertDriver)
+        {
+            try
+            {
+                var driverUnload = handleFactory.TryUnloadDriver();
+                if (driverUnload.Success)
+                {
+                    logger.LogInformation("{Message}", driverUnload.Message);
+                }
+                else
+                {
+                    logger.LogWarning("{Message}", driverUnload.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Falha inesperada ao descarregar o serviço do WinDivert");
+            }
         }
 
         _relayPort = NO_RELAY_PORT;

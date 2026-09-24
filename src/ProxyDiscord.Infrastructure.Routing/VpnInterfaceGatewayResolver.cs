@@ -5,11 +5,27 @@ namespace ProxyDiscord.Infrastructure.Routing;
 
 public sealed class VpnInterfaceGatewayResolver : IVpnInterfaceGatewayResolver
 {
-    public IPAddress? ResolveGateway(uint interfaceIndex) =>
-        IpForwardNative.ReadIpv4Table()
+    public IPAddress? ResolveGateway(uint interfaceIndex)
+    {
+        var candidates = IpForwardNative.ReadIpv4Table()
             .Where(row => row.InterfaceIndex == interfaceIndex)
-            .Select(row => row.NextHop.ToIpv4())
-            .FirstOrDefault(nextHop =>
-                nextHop.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
-                !nextHop.Equals(IPAddress.Any));
+            .OrderByDescending(row => row.IsDefaultRoute)
+            .ThenBy(row => row.Metric)
+            .Select(row => row.NextHop.ToIpv4());
+
+        return candidates.FirstOrDefault(IsUsableGateway);
+    }
+
+    private static bool IsUsableGateway(IPAddress address)
+    {
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork ||
+            address.Equals(IPAddress.Any) ||
+            address.Equals(IPAddress.Broadcast) ||
+            IPAddress.IsLoopback(address))
+        {
+            return false;
+        }
+
+        return address.GetAddressBytes()[0] < 224;
+    }
 }

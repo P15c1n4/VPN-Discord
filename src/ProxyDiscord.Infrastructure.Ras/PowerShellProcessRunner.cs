@@ -54,7 +54,8 @@ internal sealed class PowerShellProcessRunner(ILogger<PowerShellProcessRunner> l
             logger.LogWarning("Script PowerShell terminou com código {Code}. Saída: {Out} Erro: {Err}", process.ExitCode, stdOut, stdErr);
             if (process.ExitCode != 0)
             {
-                throw new InvalidOperationException($"Falha ao executar script de VPN (código {process.ExitCode}): {stdErr}");
+                throw new InvalidOperationException(
+                    $"O script de configuração da VPN terminou com o código {process.ExitCode}. Detalhes: {stdErr}");
             }
         }
     }

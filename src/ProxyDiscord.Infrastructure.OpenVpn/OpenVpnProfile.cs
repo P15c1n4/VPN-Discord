@@ -36,25 +36,30 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
     private readonly string _rootDirectory = rootDirectory ?? DEFAULT_ROOT_DIRECTORY;
 
     public OpenVpnProfile Write(
-        string configBase64, string? username, string? password, string adapterName, int managementPort)
+        string configBase64,
+        string? username,
+        string? password,
+        string adapterName,
+        int managementPort,
+        bool useProfileCredentials = false)
     {
         var published = Decode(configBase64);
-        var hasUsername = !string.IsNullOrWhiteSpace(username);
-        var hasPassword = !string.IsNullOrWhiteSpace(password);
+        var hasUsername = !useProfileCredentials && !string.IsNullOrWhiteSpace(username);
+        var hasPassword = !useProfileCredentials && !string.IsNullOrWhiteSpace(password);
 
         if (hasUsername != hasPassword)
         {
             throw new InvalidOperationException(
-                "Para usar credenciais no OpenVPN, informe usuário e senha ou deixe os dois campos vazios.");
+                "Para usar login no OpenVPN, preencha usuário e senha ou deixe ambos em branco.");
         }
 
         var hasCredentials = hasUsername && hasPassword;
 
-        if (!hasCredentials && !HasClientAuthenticationMethod(published))
+        if (!hasCredentials && !HasClientAuthenticationMethod(published, useProfileCredentials))
         {
             throw new InvalidOperationException(
-                "O perfil OpenVPN não contém certificado/chave do cliente nem usuário/senha. " +
-                "Deixe a autenticação embutida no .ovpn ou informe usuário e senha para este servidor.");
+                "O perfil OpenVPN não contém certificado/chave do cliente nem usuário e senha. " +
+                "Adicione a autenticação ao .ovpn ou informe as credenciais do servidor.");
         }
 
         var sessionDirectory = Path.Combine(_rootDirectory, Guid.NewGuid().ToString("N"));
@@ -79,7 +84,7 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
             File.WriteAllText(profile.UpScriptPath, BuildUpScript(profile.TunnelInfoPath), Encoding.ASCII);
             File.WriteAllText(
                 profile.ConfigPath,
-                BuildConfig(published, profile, adapterName, managementPort, hasCredentials),
+                BuildConfig(published, profile, adapterName, managementPort, hasCredentials, useProfileCredentials),
                 new UTF8Encoding(false));
         }
         catch
@@ -98,16 +103,21 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         if (!decoded.Contains("remote ", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "O perfil OpenVPN publicado pelo servidor não contém nenhuma diretiva 'remote'.");
+                "O perfil OpenVPN não contém uma diretiva 'remote'. Selecione um perfil válido para continuar.");
         }
 
         return decoded;
     }
 
     private static string BuildConfig(
-        string published, OpenVpnProfile profile, string adapterName, int managementPort, bool hasCredentials)
+        string published,
+        OpenVpnProfile profile,
+        string adapterName,
+        int managementPort,
+        bool hasCredentials,
+        bool useProfileCredentials)
     {
-        var normalizedPublished = RemoveAppManagedDirectives(published);
+        var normalizedPublished = RemoveAppManagedDirectives(published, preserveProfileAuthentication: useProfileCredentials);
         var builder = new StringBuilder();
         builder.AppendLine("# Gerado por ProxyDiscord. Base: perfil publicado pelo servidor VPN Gate.");
         builder.AppendLine(normalizedPublished.TrimEnd());
@@ -171,24 +181,70 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         "route-nopull",
     };
 
-    private static string RemoveAppManagedDirectives(string config) =>
-        string.Join(
-            "\n",
-            config.Split('\n').Where(raw =>
+    private static string RemoveAppManagedDirectives(string config, bool preserveProfileAuthentication)
+    {
+        var lines = new List<string>();
+        var insideAuthBlock = false;
+        foreach (var raw in config.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (string.Equals(line, "<auth-user-pass>", StringComparison.OrdinalIgnoreCase))
             {
-                var line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
+                insideAuthBlock = true;
+                if (preserveProfileAuthentication)
                 {
-                    return true;
+                    lines.Add(raw);
                 }
 
-                var separator = line.IndexOfAny([' ', '\t']);
-                var directive = separator < 0 ? line : line[..separator];
-                return !APP_MANAGED_DIRECTIVES.Contains(directive);
-            }));
+                continue;
+            }
 
-    private static bool HasClientAuthenticationMethod(string config)
+            if (insideAuthBlock)
+            {
+                if (string.Equals(line, "</auth-user-pass>", StringComparison.OrdinalIgnoreCase))
+                {
+                    insideAuthBlock = false;
+                    if (preserveProfileAuthentication)
+                    {
+                        lines.Add(raw);
+                    }
+                }
+                else if (preserveProfileAuthentication)
+                {
+                    lines.Add(raw);
+                }
+
+                continue;
+            }
+
+            if (line.Length == 0 || line.StartsWith('#') || line.StartsWith(';'))
+            {
+                lines.Add(raw);
+                continue;
+            }
+
+            var separator = line.IndexOfAny([' ', '\t']);
+            var directive = separator < 0 ? line : line[..separator];
+            if (!APP_MANAGED_DIRECTIVES.Contains(directive) ||
+                (preserveProfileAuthentication && string.Equals(directive, "auth-user-pass", StringComparison.OrdinalIgnoreCase)))
+            {
+                lines.Add(raw);
+            }
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static bool HasClientAuthenticationMethod(string config, bool includeUsernamePassword)
     {
+        if (includeUsernamePassword &&
+            (config.Contains("<auth-user-pass>", StringComparison.OrdinalIgnoreCase) ||
+             HasDirectiveWithArgument(config, "auth-user-pass") ||
+             config.Split('\n').Any(line => string.Equals(line.Trim(), "auth-user-pass", StringComparison.OrdinalIgnoreCase))))
+        {
+            return true;
+        }
+
         if (HasInlineBlock(config, "cert") && HasInlineBlock(config, "key") ||
             HasInlineBlock(config, "pkcs12"))
         {

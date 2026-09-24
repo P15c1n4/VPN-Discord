@@ -11,7 +11,8 @@ public sealed record ConnectVpnCommand(
     string? Password,
     string? OpenVpnConfigBase64 = null,
     Dtos.TunnelDnsSettings? Dns = null,
-    TunnelProtocolScope ProtocolScope = TunnelProtocolScope.TcpAndUdp)
+    TunnelProtocolScope ProtocolScope = TunnelProtocolScope.TcpAndUdp,
+    bool UseProfileOpenVpnCredentials = false)
 {
     public Dtos.TunnelDnsSettings DnsSettings => Dns ?? Dtos.TunnelDnsSettings.Default;
 }

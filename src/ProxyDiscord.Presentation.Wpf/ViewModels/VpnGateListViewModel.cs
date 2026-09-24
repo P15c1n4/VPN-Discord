@@ -61,12 +61,16 @@ public sealed partial class VpnGateListViewModel(
 
             if (IsLoadingList)
             {
-                return "carregando...";
+                return "Carregando servidores...";
             }
 
+            var serverCount = _allServers.Count == 1
+                ? "1 servidor"
+                : $"{_allServers.Count} servidores";
+
             return IsPinging
-                ? $"({_allServers.Count}) {PingCompletedCount}/{_allServers.Count}"
-                : $"({_allServers.Count})";
+                ? $"{serverCount} · testando latência {PingCompletedCount}/{_allServers.Count}"
+                : serverCount;
         }
     }
 
@@ -90,7 +94,7 @@ public sealed partial class VpnGateListViewModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao obter a lista de servidores VPN Gate");
-            LoadError = "falha ao carregar";
+            LoadError = "Não foi possível carregar os servidores.";
             IsLoadingList = false;
             return;
         }

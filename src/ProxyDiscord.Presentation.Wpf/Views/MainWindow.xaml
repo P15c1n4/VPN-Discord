@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:conv="clr-namespace:ProxyDiscord.Presentation.Wpf.Converters"
-        Title="Discord-VPN — Roteamento por processo" Height="690" Width="900"
+        Title="Discord-VPN: roteamento por processo" Height="720" Width="900"
         ResizeMode="CanMinimize" WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <conv:ConnectionStatusToColorConverter x:Key="StatusToColorConverter"/>
@@ -10,6 +10,19 @@
         <conv:TunnelProtocolScopeNameConverter x:Key="ScopeNameConverter"/>
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
     </Window.Resources>
+
+    <DockPanel>
+        <Menu DockPanel.Dock="Top" Margin="8,4,0,0">
+            <MenuItem Header="_Configurações">
+                <MenuItem Header="Salvar login e senha por servidor"
+                          IsCheckable="True"
+                          IsChecked="{Binding SaveCredentialsEnabled, Mode=OneWay}"
+                          Click="SaveCredentials_Click"/>
+                <Separator/>
+                <MenuItem Header="Verificar atualizações"
+                          Command="{Binding CheckForUpdatesCommand}"/>
+            </MenuItem>
+        </Menu>
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -28,16 +41,16 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0" Orientation="Vertical">
-                    <TextBlock Text="Processo roteado" Style="{StaticResource SecondaryTextStyle}"/>
+                    <TextBlock Text="Aplicativo monitorado" Style="{StaticResource SecondaryTextStyle}"/>
                     <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
                         <TextBlock Text="{Binding SelectedProcessDisplay}" FontWeight="SemiBold" FontSize="15" VerticalAlignment="Center"/>
-                        <Button Content="Processo..." Command="{Binding OpenProcessPickerCommand}" Margin="12,0,0,0"/>
-                        <Button Content="Procurar .exe..." Command="{Binding BrowseForExecutableCommand}" Margin="6,0,0,0"/>
+                        <Button Content="Escolher processo" Command="{Binding OpenProcessPickerCommand}" Margin="12,0,0,0"/>
+                        <Button Content="Escolher executável" Command="{Binding BrowseForExecutableCommand}" Margin="6,0,0,0"/>
                     </StackPanel>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Vertical" Margin="16,0,16,0">
-                    <TextBlock Text="Tráfego tunelado" Style="{StaticResource SecondaryTextStyle}"/>
+                    <TextBlock Text="Protocolos roteados" Style="{StaticResource SecondaryTextStyle}"/>
                     <ComboBox ItemsSource="{Binding ProtocolScopes}" SelectedItem="{Binding SelectedProtocolScope}"
                               Width="130" Margin="0,2,0,0">
                         <ComboBox.ItemTemplate>
@@ -60,7 +73,7 @@
 
         <Border Grid.Row="1" Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,12">
             <StackPanel>
-                <TextBlock Text="Configuração da VPN (OpenVPN / MS-SSTP)" Style="{StaticResource SectionHeaderStyle}"/>
+                <TextBlock Text="Conexão VPN (OpenVPN / MS-SSTP)" Style="{StaticResource SectionHeaderStyle}"/>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -72,12 +85,14 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,8,8">
-                        <TextBlock Text="Servidor (hostname)" Style="{StaticResource SecondaryTextStyle}"/>
-                        <TextBox Text="{Binding ServerHost, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Text="Servidor (host ou IP)" Style="{StaticResource SecondaryTextStyle}"/>
+                        <TextBox Text="{Binding ServerHost, UpdateSourceTrigger=PropertyChanged}"
+                                 LostFocus="ServerIdentity_LostFocus"/>
                     </StackPanel>
                     <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,8,8">
                         <TextBlock Text="Porta" Style="{StaticResource SecondaryTextStyle}"/>
-                        <TextBox Text="{Binding ServerPort, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBox Text="{Binding ServerPort, UpdateSourceTrigger=PropertyChanged}"
+                                 LostFocus="ServerIdentity_LostFocus"/>
                     </StackPanel>
                     <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,8">
                         <TextBlock Text="Protocolo" Style="{StaticResource SecondaryTextStyle}"/>
@@ -90,12 +105,12 @@
                         </ComboBox>
                     </StackPanel>
                     <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,0,8,0">
-                        <TextBlock Text="Usuário (obrigatório no SSTP)" Style="{StaticResource SecondaryTextStyle}"/>
+                        <TextBlock Text="Usuário" Style="{StaticResource SecondaryTextStyle}"/>
                         <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
                     </StackPanel>
                     <StackPanel Grid.Row="1" Grid.Column="2">
-                        <TextBlock Text="Senha (obrigatória no SSTP)" Style="{StaticResource SecondaryTextStyle}"/>
-                        <TextBox Text="{Binding Password, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Text="Senha" Style="{StaticResource SecondaryTextStyle}"/>
+                        <PasswordBox x:Name="PasswordInput" PasswordChanged="PasswordInput_PasswordChanged"/>
                     </StackPanel>
                 </Grid>
                 <Grid Margin="0,8,0,0">
@@ -113,7 +128,7 @@
                         </StackPanel>
                     </StackPanel>
                     <StackPanel Grid.Column="1">
-                        <TextBlock Text="DNS para resolver domínios" Style="{StaticResource SecondaryTextStyle}"/>
+                        <TextBlock Text="Servidor DNS" Style="{StaticResource SecondaryTextStyle}"/>
                         <ComboBox ItemsSource="{Binding DnsSuggestions}" Text="{Binding DnsServer, UpdateSourceTrigger=PropertyChanged}"
                                   IsEditable="True"/>
                     </StackPanel>
@@ -131,13 +146,13 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Servidores públicos (VPN Gate)" Style="{StaticResource SectionHeaderStyle}"/>
+                    <TextBlock Grid.Column="0" Text="Servidores públicos do VPN Gate" Style="{StaticResource SectionHeaderStyle}"/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                         <ProgressBar Width="80" Height="4" IsIndeterminate="True" VerticalAlignment="Center" Margin="0,0,8,0"
                                      Visibility="{Binding VpnGateList.IsBusy, Converter={StaticResource BoolToVisibilityConverter}}"/>
                         <TextBlock Text="{Binding VpnGateList.StatusText}" Style="{StaticResource SecondaryTextStyle}"
                                    VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <Button Content="Atualizar lista" Command="{Binding VpnGateList.LoadCommand}"/>
+                        <Button Content="Atualizar servidores" Command="{Binding VpnGateList.LoadCommand}"/>
                     </StackPanel>
                 </Grid>
                 <ListView Grid.Row="1" ItemsSource="{Binding VpnGateList.Servers}" BorderThickness="0"
@@ -151,7 +166,7 @@
                         <GridView>
                             <GridViewColumn Width="70">
                                 <GridViewColumn.Header>
-                                    <GridViewColumnHeader Content="Ping" Tag="Ping"/>
+                                    <GridViewColumnHeader Content="Latência" Tag="Ping"/>
                                 </GridViewColumn.Header>
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
@@ -177,7 +192,7 @@
                             </GridViewColumn>
                             <GridViewColumn Width="130" DisplayMemberBinding="{Binding Address}">
                                 <GridViewColumn.Header>
-                                    <GridViewColumnHeader Content="Endereço (IP)" Tag="Address"/>
+                                    <GridViewColumnHeader Content="Endereço IP" Tag="Address"/>
                                 </GridViewColumn.Header>
                             </GridViewColumn>
                             <GridViewColumn Width="70" DisplayMemberBinding="{Binding Port}">
@@ -197,7 +212,7 @@
                             </GridViewColumn>
                             <GridViewColumn Width="70" DisplayMemberBinding="{Binding Score}">
                                 <GridViewColumn.Header>
-                                    <GridViewColumnHeader Content="Score" Tag="Score"/>
+                                    <GridViewColumnHeader Content="Pontuação" Tag="Score"/>
                                 </GridViewColumn.Header>
                             </GridViewColumn>
                         </GridView>
@@ -210,15 +225,37 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock Grid.Column="0" Text="{Binding ErrorMessage}" Foreground="{StaticResource StatusErrorBrush}"
-                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxHeight="18"
-                       ToolTip="{Binding ErrorMessage}" Margin="0,0,12,0"/>
-            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                <Button Content="Diagnóstico..." Command="{Binding OpenDiagnosticsCommand}" Margin="0,0,8,0"/>
-                <Button Content="Liberar recursos" Command="{Binding CleanupResourcesCommand}" ToolTip="Fecha WinDivert, relays, rota e VPN" Margin="0,0,8,0"/>
+            <Grid Grid.Column="0" Visibility="{Binding HasErrorMessage, Converter={StaticResource BoolToVisibilityConverter}}"
+                  VerticalAlignment="Center" Margin="0,0,12,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Content="Ver erro" Click="ErrorDetails_Click" Margin="0,0,8,0"/>
+                <TextBlock Grid.Column="1" Text="{Binding ErrorMessage}"
+                           Foreground="{StaticResource StatusErrorBrush}" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis">
+                    <TextBlock.ToolTip>
+                        <ToolTip Placement="Top" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                            <Border Width="440" Background="#FFFFF1F1"
+                                    BorderBrush="{StaticResource StatusErrorBrush}" BorderThickness="1"
+                                    CornerRadius="4" Padding="10">
+                                <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <TextBlock Text="{Binding ErrorMessage}" TextWrapping="Wrap"/>
+                                </ScrollViewer>
+                            </Border>
+                        </ToolTip>
+                    </TextBlock.ToolTip>
+                </TextBlock>
+            </Grid>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Diagnóstico" Command="{Binding OpenDiagnosticsCommand}" Margin="0,0,8,0"/>
+                <Button Content="Limpar e desconectar" Command="{Binding CleanupResourcesCommand}" ToolTip="Encerra a VPN e libera os recursos de rede" Margin="0,0,8,0"/>
                 <Button Content="Desconectar" Command="{Binding DisconnectCommand}" Margin="0,0,8,0"/>
                 <Button Content="Conectar" Command="{Binding ConnectCommand}" Style="{StaticResource PrimaryButtonStyle}"/>
             </StackPanel>
         </Grid>
     </Grid>
+    </DockPanel>
 </Window>

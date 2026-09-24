@@ -120,9 +120,9 @@ internal sealed class TrayIcon : IDisposable
 
         try
         {
-            NativeShell.AppendMenuW(menu, NativeShell.MF_STRING, new IntPtr(MENU_OPEN_ID), "Abrir");
+            NativeShell.AppendMenuW(menu, NativeShell.MF_STRING, new IntPtr(MENU_OPEN_ID), "Abrir janela");
             NativeShell.AppendMenuW(menu, NativeShell.MF_SEPARATOR, IntPtr.Zero, null);
-            NativeShell.AppendMenuW(menu, NativeShell.MF_STRING, new IntPtr(MENU_EXIT_ID), "Fechar");
+            NativeShell.AppendMenuW(menu, NativeShell.MF_STRING, new IntPtr(MENU_EXIT_ID), "Sair");
 
             if (!NativeShell.GetCursorPos(out var cursor))
             {

@@ -1,0 +1,64 @@
+name: Build and publish Windows release
+
+on:
+  push:
+    tags:
+      - "Version-*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -cnotmatch '^Version-(\d+\.\d+\.\d+)$') {
+            throw "Use uma tag no formato Version-x.x.x, por exemplo Version-1.2.3; recebida: $tag"
+          }
+          $version = $Matches[1]
+          Add-Content -Path $env:GITHUB_ENV -Value "RELEASE_VERSION=$version"
+
+      - name: Publish application package
+        shell: pwsh
+        run: >-
+          dotnet publish src/ProxyDiscord.Presentation.Wpf/ProxyDiscord.Presentation.Wpf.csproj
+          --configuration Release --runtime win-x64 --self-contained true
+          -p:Version=$env:RELEASE_VERSION -o artifacts/app
+
+      - name: Publish standalone updater
+        shell: pwsh
+        run: >-
+          dotnet publish src/ProxyDiscord.Updater/ProxyDiscord.Updater.csproj
+          --configuration Release --runtime win-x64 --self-contained true
+          -p:Version=$env:RELEASE_VERSION -o artifacts/app/updater
+
+      - name: Package release asset
+        shell: pwsh
+        run: |
+          if (!(Test-Path artifacts/app/Discord-VPN.exe) -or
+              !(Test-Path artifacts/app/updater/Discord-VPN.Updater.exe)) {
+            throw "A publicação não produziu o executável principal e o updater."
+          }
+          Compress-Archive -Path artifacts/app/* `
+            -DestinationPath artifacts/Discord-VPN-win-x64.zip `
+            -CompressionLevel Optimal
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: >-
+          gh release create $env:GITHUB_REF_NAME artifacts/Discord-VPN-win-x64.zip
+          --verify-tag --generate-notes --title "Discord-VPN $env:GITHUB_REF_NAME"

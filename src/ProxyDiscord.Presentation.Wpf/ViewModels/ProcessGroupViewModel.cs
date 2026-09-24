@@ -19,7 +19,7 @@ public sealed class ProcessGroupViewModel
 
     public string InstanceText => Instances.Count > 1 ? $"({Instances.Count})" : "";
 
-    public string PathText => ExecutablePath ?? "caminho indisponível";
+    public string PathText => ExecutablePath ?? "Caminho não disponível";
 
     public ProcessInfo Representative =>
         Instances.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p.ExecutablePath)) ?? Instances[0];

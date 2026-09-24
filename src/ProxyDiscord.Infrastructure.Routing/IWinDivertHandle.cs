@@ -17,7 +17,11 @@ public interface IWinDivertHandleFactory
     IWinDivertHandle OpenNetwork(string filter);
 
     IWinDivertSocketEvents OpenSocketEvents(string filter);
+
+    WinDivertDriverUnloadResult TryUnloadDriver();
 }
+
+public readonly record struct WinDivertDriverUnloadResult(bool Success, string Message);
 
 public enum SocketEventKind
 {

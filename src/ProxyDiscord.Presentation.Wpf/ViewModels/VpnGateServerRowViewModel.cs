@@ -19,7 +19,7 @@ public sealed partial class VpnGateServerRowViewModel(VpnGateServerEntry entry) 
     public int Score => Entry.Score;
 
     [ObservableProperty]
-    private string _latencyText = "aguardando";
+    private string _latencyText = "Aguardando";
 
     [ObservableProperty]
     private int? _latencyMs;
@@ -38,7 +38,7 @@ public sealed partial class VpnGateServerRowViewModel(VpnGateServerEntry entry) 
         else
         {
             LatencyMs = null;
-            LatencyText = "falha";
+            LatencyText = "Sem resposta";
             PingFailed = true;
         }
     }

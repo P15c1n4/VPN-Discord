@@ -22,7 +22,7 @@ public sealed class VpnConnectionRouter(
         if (!_providers.TryGetValue(request.Protocol, out var provider))
         {
             return VpnConnectionResult.Failed(
-                VpnLinkStatus.Error, $"Protocolo {request.Protocol.DisplayName()} não é suportado por esta build.");
+                VpnLinkStatus.Error, $"O protocolo {request.Protocol.DisplayName()} não é compatível com esta versão do aplicativo.");
         }
 
         if (_active is not null)

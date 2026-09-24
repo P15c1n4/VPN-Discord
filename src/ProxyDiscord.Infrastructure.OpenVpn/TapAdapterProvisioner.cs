@@ -30,7 +30,7 @@ internal sealed class TapAdapterProvisioner(OpenVpnBinaries binaries, ILogger<Ta
         if (FindExistingAdapter() is null)
         {
             throw new InvalidOperationException(
-                $"O adaptador TAP '{ADAPTER_NAME}' foi criado, mas não apareceu na lista de interfaces de rede.");
+                $"O adaptador TAP '{ADAPTER_NAME}' foi criado, mas ainda não aparece na lista de interfaces de rede.");
         }
 
         logger.LogInformation("Adaptador TAP '{Name}' criado.", ADAPTER_NAME);
@@ -57,7 +57,8 @@ internal sealed class TapAdapterProvisioner(OpenVpnBinaries binaries, ILogger<Ta
         if (!result.Success && result.ExitCode != 259)
         {
             throw new InvalidOperationException(
-                $"Falha ao instalar o driver TAP (pnputil saiu com {result.ExitCode}). Saída: {result.Output.Trim()}");
+                $"Não foi possível instalar o driver TAP (pnputil, código {result.ExitCode}). " +
+                $"Detalhes: {result.Output.Trim()}");
         }
 
         logger.LogDebug("pnputil: {Output}", result.Output.Trim());
@@ -74,7 +75,8 @@ internal sealed class TapAdapterProvisioner(OpenVpnBinaries binaries, ILogger<Ta
         if (!result.Success)
         {
             throw new InvalidOperationException(
-                $"Falha ao criar o adaptador TAP (tapctl saiu com {result.ExitCode}). Saída: {result.Output.Trim()}");
+                $"Não foi possível criar o adaptador TAP (tapctl, código {result.ExitCode}). " +
+                $"Detalhes: {result.Output.Trim()}");
         }
     }
 

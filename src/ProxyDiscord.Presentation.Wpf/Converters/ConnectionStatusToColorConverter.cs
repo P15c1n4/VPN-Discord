@@ -29,11 +29,11 @@ public sealed class ConnectionStatusToTextConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
     {
-        ConnectionStatus.Idle => "Inativo",
-        ConnectionStatus.Connecting => "Conectando...",
+        ConnectionStatus.Idle => "Desconectado",
+        ConnectionStatus.Connecting => "Conectando",
         ConnectionStatus.Connected => "Conectado",
         ConnectionStatus.Error => "Erro",
-        _ => "Inativo"
+        _ => "Desconectado"
     };
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>

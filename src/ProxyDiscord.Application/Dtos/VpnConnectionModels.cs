@@ -8,7 +8,8 @@ public sealed record VpnConnectionRequest(
     string? Username,
     string? Password,
     string EntryNameHint,
-    string? OpenVpnConfigBase64 = null);
+    string? OpenVpnConfigBase64 = null,
+    bool UseProfileOpenVpnCredentials = false);
 
 public sealed record VpnConnectionResult(bool Success, VpnLinkStatus Status, string? ErrorMessage)
 {

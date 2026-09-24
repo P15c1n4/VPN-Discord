@@ -114,6 +114,8 @@ public partial class App : System.Windows.Application
         Shutdown();
     }
 
+    public void ExitForUpdate() => ExitApplication();
+
     private void ShowMainWindow()
     {
         if (MainWindow is not { } window)

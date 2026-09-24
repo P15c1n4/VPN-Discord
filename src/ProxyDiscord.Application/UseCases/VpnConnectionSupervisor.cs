@@ -44,12 +44,12 @@ public sealed class VpnConnectionSupervisor : IDisposable
 
             _logger.LogWarning("A sessão VPN perdeu o túnel; iniciando limpeza automática: {Reason}", args.Reason);
             await _disconnectVpnUseCase.ExecuteAsync(CancellationToken.None);
-            _sessionContext.SetError($"A conexão VPN caiu: {args.Reason}");
+            _sessionContext.SetError($"A conexão VPN foi interrompida. Detalhes: {args.Reason}");
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Falha ao limpar a sessão após queda da VPN");
-            _sessionContext.SetError($"A conexão VPN caiu e a limpeza falhou: {args.Reason}");
+            _sessionContext.SetError($"A conexão VPN foi interrompida e a limpeza não foi concluída. Detalhes: {args.Reason}");
         }
         finally
         {

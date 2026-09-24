@@ -12,6 +12,12 @@ O Discord-VPN limita-se a realizar o tunelamento de pacotes TCP e UDP **APENAS**
 > Instalação Desnecessária na versão FULL_PORTABLE.
 >### Contem Claude.
 
+## Atualizações
+
+O aplicativo consulta as releases do GitHub ao iniciar e também permite verificar manualmente em **Config > Verificar atualizações**. A instalação só começa após confirmação e preserva `config.json` e `user_auth.json`.
+
+Para publicar uma nova versão, envie uma tag no formato `Version-x.x.x`, por exemplo `Version-1.2.3`. O fluxo do GitHub Actions publica o pacote Windows `Discord-VPN-win-x64.zip`, que inclui o aplicativo completo e o updater separado.
+
 ---
 ## USO
 

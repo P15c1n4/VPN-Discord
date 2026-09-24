@@ -12,7 +12,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <TextBlock Grid.Row="0" Text="Aplicativos em execução" Style="{StaticResource SectionHeaderStyle}"/>
+        <TextBlock Grid.Row="0" Text="Processos em execução" Style="{StaticResource SectionHeaderStyle}"/>
 
         <Border Grid.Row="1" Style="{StaticResource PanelBorderStyle}" Margin="0,4,0,8">
             <TreeView x:Name="ProcessTreeView"
@@ -46,8 +46,8 @@
         </Border>
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
             <TextBlock Text="{Binding LoadError}" Foreground="{StaticResource StatusErrorBrush}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-            <Button Content="Atualizar" Command="{Binding LoadCommand}" Margin="0,0,8,0"/>
-            <Button Content="Selecionar" Style="{StaticResource PrimaryButtonStyle}" Click="SelectButton_Click"/>
+            <Button Content="Recarregar" Command="{Binding LoadCommand}" Margin="0,0,8,0"/>
+            <Button Content="Selecionar processo" Style="{StaticResource PrimaryButtonStyle}" Click="SelectButton_Click"/>
         </StackPanel>
     </Grid>
 </Window>

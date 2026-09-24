@@ -5,7 +5,9 @@ using ProxyDiscord.Application.Ports;
 
 namespace ProxyDiscord.Infrastructure.Routing;
 
-public sealed class VpnRouteManager(ILogger<VpnRouteManager> logger) : IVpnRouteManager
+public sealed class VpnRouteManager(
+    IVpnInterfaceGatewayResolver gatewayResolver,
+    ILogger<VpnRouteManager> logger) : IVpnRouteManager
 {
     public const uint TUNNEL_ROUTE_METRIC = 9000;
 
@@ -50,9 +52,9 @@ public sealed class VpnRouteManager(ILogger<VpnRouteManager> logger) : IVpnRoute
             if (status != IpForwardNative.NO_ERROR)
             {
                 throw new InvalidOperationException(
-                    $"Falha ao criar a rota padrão na interface VPN {adapter.InterfaceIndex} " +
-                    $"(next hop {nextHop}): CreateIpForwardEntry2 retornou {status}. " +
-                    "Sem essa rota nenhum socket fixado na VPN consegue sair para a internet.");
+                    $"Não foi possível adicionar a rota IPv4 padrão à interface VPN {adapter.InterfaceIndex} " +
+                    $"(gateway {nextHop}; código Win32 {status}). Sem essa rota, as conexões pela VPN " +
+                    "não terão acesso à internet.");
             }
 
             _installedRoute = row;
@@ -133,17 +135,34 @@ public sealed class VpnRouteManager(ILogger<VpnRouteManager> logger) : IVpnRoute
 
     private IPAddress ResolveNextHop(VpnAdapterInfo adapter)
     {
-        if (string.IsNullOrWhiteSpace(adapter.GatewayIp) ||
-            !IPAddress.TryParse(adapter.GatewayIp, out var gateway))
+        if (!string.IsNullOrWhiteSpace(adapter.GatewayIp) &&
+            IPAddress.TryParse(adapter.GatewayIp, out var announcedGateway) &&
+            IsUsableGateway(announcedGateway))
         {
-            throw new InvalidOperationException(
-                $"A interface VPN {adapter.InterfaceIndex} não informou um gateway IPv4 utilizável; " +
-                "a rota do túnel não será instalada via 0.0.0.0.");
+            logger.LogDebug("Usando gateway {Gateway} anunciado pela VPN como next hop.", announcedGateway);
+            return announcedGateway;
         }
 
-        logger.LogDebug("Usando gateway {Gateway} anunciado pela VPN como next hop.", gateway);
-        return gateway;
+        var routeGateway = gatewayResolver.ResolveGateway(adapter.InterfaceIndex);
+        if (routeGateway is not null && IsUsableGateway(routeGateway))
+        {
+            logger.LogInformation(
+                "A interface VPN {IfIdx} não anunciou gateway; usando o peer {Gateway} encontrado na tabela de rotas.",
+                adapter.InterfaceIndex,
+                routeGateway);
+            return routeGateway;
+        }
+
+        throw new InvalidOperationException(
+            $"A interface VPN {adapter.InterfaceIndex} não informou um gateway IPv4 utilizável, e nenhum peer " +
+            "foi encontrado nas rotas existentes. A rota padrão não foi instalada.");
     }
+
+    private static bool IsUsableGateway(IPAddress gateway) =>
+        gateway.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+        !gateway.Equals(IPAddress.Any) &&
+        !gateway.Equals(IPAddress.Broadcast) &&
+        !IPAddress.IsLoopback(gateway);
 
     private void LogInterfaceRoutes(uint interfaceIndex, string moment)
     {

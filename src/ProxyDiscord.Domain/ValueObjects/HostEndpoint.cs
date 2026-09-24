@@ -17,12 +17,12 @@ public sealed record HostEndpoint
     {
         if (string.IsNullOrWhiteSpace(host))
         {
-            throw new AddressParseException("O endereço do servidor não pode ser vazio.");
+            throw new AddressParseException("Informe o endereço do servidor.");
         }
 
         if (port is <= 0 or > 65535)
         {
-            throw new AddressParseException($"Porta inválida: {port} não é um número entre 1 e 65535.");
+            throw new AddressParseException($"A porta {port} é inválida. Informe um número entre 1 e 65535.");
         }
 
         return new HostEndpoint(host.Trim(), port);
@@ -32,7 +32,7 @@ public sealed record HostEndpoint
     {
         if (string.IsNullOrWhiteSpace(raw))
         {
-            throw new AddressParseException("O endereço do servidor não pode ser vazio.");
+            throw new AddressParseException("Informe o endereço do servidor.");
         }
 
         var trimmed = raw.Trim();
@@ -51,7 +51,7 @@ public sealed record HostEndpoint
             if (!hostPart.Contains(':'))
             {
                 throw new AddressParseException(
-                    $"Porta inválida em '{raw}': '{portPart}' não é um número entre 1 e 65535.");
+                    $"A porta '{portPart}' é inválida. Informe um número entre 1 e 65535.");
             }
         }
 

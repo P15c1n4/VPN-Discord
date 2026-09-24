@@ -63,12 +63,12 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         {
             return new EgressSelfTestResult(
                 false,
-                $"nenhum serviço de IP público respondeu pela VPN; a saída do túnel não pôde ser confirmada. " +
+                $"Nenhum serviço de IP público respondeu pela VPN. Não foi possível confirmar a saída do túnel. " +
                 vpnProbe.Details);
         }
 
         var udpWorks = await TryDnsThroughVpnAsync(adapter, cancellationToken);
-        PublicIpProbeResult directProbe = new(null, "consulta direta não executada");
+        PublicIpProbeResult directProbe = new(null, "Consulta direta não executada.");
 
         if (directInterface is not null)
         try
@@ -85,12 +85,12 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
 
         var directIp = directProbe.Ip;
         var comparisonNote = directInterface is null
-            ? "interface física não identificada; comparação direta ignorada"
+            ? "A interface física não foi identificada; comparação direta ignorada."
             : directIp is null
-                ? $"consulta direta sem resposta ({directProbe.Details})"
+                ? $"A consulta direta não respondeu ({directProbe.Details})."
                 : string.Equals(directIp, vpnProbe.Ip, StringComparison.OrdinalIgnoreCase)
-                    ? $"aviso: o IP direto e o IP da VPN coincidiram ({vpnProbe.Ip}); isso não reprova o túnel"
-                    : $"IP direto diferente ({directIp})";
+                    ? $"Aviso: o IP direto é igual ao da VPN ({vpnProbe.Ip}). Isso não reprova a conexão."
+                    : $"IP direto diferente: {directIp}.";
 
         if (directIp is not null && string.Equals(directIp, vpnProbe.Ip, StringComparison.OrdinalIgnoreCase))
         {
@@ -100,10 +100,10 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
                 vpnProbe.Ip, adapter.InterfaceIndex);
         }
 
-        var udpNote = udpWorks ? "UDP ok" : "UDP sem resposta";
+        var udpNote = udpWorks ? "UDP: OK" : "UDP: sem resposta";
         return new EgressSelfTestResult(
             true,
-            $"IP público pela VPN {vpnProbe.Ip} (direto {directIp ?? "desconhecido"}), TCP ok, {udpNote}; " +
+            $"IP de saída pela VPN: {vpnProbe.Ip}. TCP: OK. {udpNote}. " +
             comparisonNote,
             vpnProbe.Ip, directIp, udpWorks);
     }

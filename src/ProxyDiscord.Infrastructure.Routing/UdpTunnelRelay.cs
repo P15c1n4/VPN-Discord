@@ -14,6 +14,7 @@ public sealed class UdpTunnelRelay(
     ILogger<UdpTunnelRelay> logger) : IAsyncDisposable
 {
     private static readonly TimeSpan SESSION_IDLE_TIMEOUT = TimeSpan.FromMinutes(2);
+    private const int SIO_UDP_CONNRESET = unchecked((int)0x9800000C);
 
     private readonly ConcurrentDictionary<UdpSessionKey, UdpSession> _sessions = new();
     private readonly LocalAddressSet _localAddresses = new();
@@ -37,6 +38,7 @@ public sealed class UdpTunnelRelay(
         _cts = new CancellationTokenSource();
 
         _listener = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        DisableUdpConnectionReset(_listener, "listener local");
         _listener.Bind(new IPEndPoint(IPAddress.Any, 0));
         ListenPort = ((IPEndPoint)_listener.LocalEndPoint!).Port;
 
@@ -64,6 +66,13 @@ public sealed class UdpTunnelRelay(
             }
             catch (SocketException ex)
             {
+                if (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    logger.LogTrace(
+                        "Destino UDP local recusou um datagrama; o relay continuará aguardando novos pacotes.");
+                    continue;
+                }
+
                 logger.LogDebug(ex, "Falha ao receber datagrama no relay UDP");
                 continue;
             }
@@ -133,6 +142,7 @@ public sealed class UdpTunnelRelay(
         try
         {
             upstream = VpnBoundSocketFactory.CreateUdpSocket(_vpnAdapter!);
+            DisableUdpConnectionReset(upstream, $"saída para {destination}");
         }
         catch (SocketException ex)
         {
@@ -217,6 +227,19 @@ public sealed class UdpTunnelRelay(
             .Remove(new KeyValuePair<UdpSessionKey, UdpSession>(key, session)))
         {
             session.Upstream.Dispose();
+        }
+    }
+
+    private void DisableUdpConnectionReset(Socket socket, string role)
+    {
+        try
+        {
+            // No Windows, evita que um ICMP Port Unreachable interrompa a próxima leitura UDP.
+            socket.IOControl(SIO_UDP_CONNRESET, new byte[sizeof(int)], null);
+        }
+        catch (Exception ex) when (ex is SocketException or NotSupportedException)
+        {
+            logger.LogDebug(ex, "Não foi possível desabilitar UDP_CONNRESET no socket {Role}", role);
         }
     }
 

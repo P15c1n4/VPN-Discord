@@ -50,7 +50,7 @@ public sealed partial class ProcessPickerViewModel(
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao listar processos em execução");
-            LoadError = $"Falha ao listar processos: {ex.Message}";
+            LoadError = $"Não foi possível listar os processos. Detalhes: {ex.Message}";
         }
         finally
         {

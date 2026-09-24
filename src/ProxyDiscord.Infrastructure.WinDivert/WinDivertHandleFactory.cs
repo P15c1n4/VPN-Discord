@@ -7,4 +7,6 @@ internal sealed class WinDivertHandleFactory : IWinDivertHandleFactory
     public IWinDivertHandle OpenNetwork(string filter) => new WinDivertHandle(filter);
 
     public IWinDivertSocketEvents OpenSocketEvents(string filter) => new WinDivertSocketEventHandle(filter);
+
+    public WinDivertDriverUnloadResult TryUnloadDriver() => WinDivertDriverService.TryUnload();
 }

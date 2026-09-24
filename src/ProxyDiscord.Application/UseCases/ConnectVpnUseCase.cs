@@ -45,7 +45,8 @@ public sealed class ConnectVpnUseCase(
             command.Username,
             command.Password,
             entryName,
-            command.OpenVpnConfigBase64);
+            command.OpenVpnConfigBase64,
+            command.UseProfileOpenVpnCredentials);
 
         // Captura antes de discar: o OpenVPN pode alterar as rotas assim que o túnel sobe.
         // A consulta direta do auto-teste precisa continuar presa à interface física original.
@@ -59,13 +60,14 @@ public sealed class ConnectVpnUseCase(
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha inesperada ao discar a VPN");
-            sessionContext.SetError($"Falha ao conectar VPN: {ex.Message}");
-            return VpnConnectionResult.Failed(VpnLinkStatus.Error, ex.Message);
+            var error = $"Não foi possível conectar à VPN. Detalhes: {ex.Message}";
+            sessionContext.SetError(error);
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, error);
         }
 
         if (!connectResult.Success)
         {
-            var reason = connectResult.ErrorMessage ?? "Falha desconhecida ao conectar a VPN.";
+            var reason = connectResult.ErrorMessage ?? "O serviço de VPN não informou o motivo da falha.";
             logger.LogWarning("Conexão VPN recusada: {Reason}", reason);
             sessionContext.SetError(reason);
             return connectResult;
@@ -89,14 +91,15 @@ public sealed class ConnectVpnUseCase(
         {
             logger.LogError(ex, "Falha ao instalar a rota do túnel na interface VPN");
             await RollbackAsync(cancellationToken);
-            sessionContext.SetError($"Falha ao configurar a rota do túnel: {ex.Message}");
-            return VpnConnectionResult.Failed(VpnLinkStatus.Error, ex.Message);
+            var error = $"Não foi possível configurar a rota da VPN. Detalhes: {ex.Message}";
+            sessionContext.SetError(error);
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, error);
         }
 
         var selfTest = await egressSelfTest.RunAsync(adapter, directInterface, cancellationToken);
         if (!selfTest.Success)
         {
-            var error = $"A VPN conectou, mas o tráfego não sai por ela: {selfTest.Summary}";
+            var error = $"A conexão VPN não passou no teste de saída: {selfTest.Summary}";
             logger.LogError("{Error}", error);
             await RollbackAsync(cancellationToken);
             sessionContext.SetError(error);
@@ -113,8 +116,9 @@ public sealed class ConnectVpnUseCase(
         {
             logger.LogError(ex, "Falha ao iniciar o motor de roteamento por processo");
             await RollbackAsync(cancellationToken);
-            sessionContext.SetError($"Falha ao iniciar roteamento: {ex.Message}");
-            return VpnConnectionResult.Failed(VpnLinkStatus.Error, ex.Message);
+            var error = $"Não foi possível iniciar o roteamento do processo. Detalhes: {ex.Message}";
+            sessionContext.SetError(error);
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, error);
         }
 
         var trafficObserved = await WaitForTrafficAsync(cancellationToken);

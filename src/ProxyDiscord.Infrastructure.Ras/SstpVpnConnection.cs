@@ -30,7 +30,7 @@ internal sealed class SstpVpnConnection(
         {
             return VpnConnectionResult.Failed(
                 VpnLinkStatus.Error,
-                "A conexão MS-SSTP exige usuário e senha.");
+                "Para conectar por MS-SSTP, informe usuário e senha.");
         }
 
         var entryName = request.EntryNameHint;
@@ -49,7 +49,7 @@ internal sealed class SstpVpnConnection(
         catch (Exception ex)
         {
             logger.LogError(ex, "Falha ao criar a entrada de VPN '{Entry}'", entryName);
-            return VpnConnectionResult.Failed(VpnLinkStatus.Error, $"Falha ao configurar a conexão VPN: {ex.Message}");
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, $"Não foi possível configurar a conexão MS-SSTP. Detalhes: {ex.Message}");
         }
 
         var dialed = await rasDial.DialAsync(entryName, request.Username, request.Password, cancellationToken);
@@ -58,7 +58,7 @@ internal sealed class SstpVpnConnection(
             await CleanupEntryAsync(entryName, CancellationToken.None);
             return VpnConnectionResult.Failed(
                 VpnLinkStatus.Error,
-                "O Windows recusou a discagem da VPN MS-SSTP. Verifique o servidor, a porta, o usuário e a senha.");
+                "O Windows não conseguiu conectar por MS-SSTP. Confira o servidor, a porta e as credenciais.");
         }
 
         var connected = await WaitUntilUpAsync(entryName, cancellationToken);
@@ -66,7 +66,7 @@ internal sealed class SstpVpnConnection(
         {
             await rasDial.HangUpAsync(entryName, CancellationToken.None);
             await CleanupEntryAsync(entryName, CancellationToken.None);
-            return VpnConnectionResult.Failed(VpnLinkStatus.Error, "A VPN discou, mas o adaptador de rede não ficou ativo a tempo.");
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, "A conexão foi iniciada, mas a interface de rede não ficou pronta a tempo.");
         }
 
         _activeEntryName = entryName;

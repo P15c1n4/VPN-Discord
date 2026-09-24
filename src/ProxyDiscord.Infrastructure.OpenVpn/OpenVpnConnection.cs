@@ -46,14 +46,14 @@ internal sealed class OpenVpnConnection(
         {
             return VpnConnectionResult.Failed(
                 VpnLinkStatus.Error,
-                $"Os binários do OpenVPN não foram encontrados na instalação: {binaries.DescribeMissing()}");
+                $"Os arquivos necessários do OpenVPN não foram encontrados. Detalhes: {binaries.DescribeMissing()}");
         }
 
         if (string.IsNullOrWhiteSpace(request.OpenVpnConfigBase64))
         {
             return VpnConnectionResult.Failed(
                 VpnLinkStatus.Error,
-                "Este servidor não publicou um perfil OpenVPN. Selecione-o pela lista de servidores ou use MS-SSTP.");
+                "Este servidor não oferece um perfil OpenVPN. Escolha outro servidor ou use MS-SSTP.");
         }
 
         await DisconnectAsync(cancellationToken);
@@ -70,7 +70,12 @@ internal sealed class OpenVpnConnection(
             var managementPort = ReserveLoopbackPort();
 
             var profile = profileWriter.Write(
-                request.OpenVpnConfigBase64, request.Username, request.Password, adapterName, managementPort);
+                request.OpenVpnConfigBase64,
+                request.Username,
+                request.Password,
+                adapterName,
+                managementPort,
+                request.UseProfileOpenVpnCredentials);
 
             lock (_lock)
             {
@@ -106,7 +111,7 @@ internal sealed class OpenVpnConnection(
             if (adapterInfo is null)
             {
                 return await FailAsync(
-                    "O OpenVPN conectou, mas o endereço do túnel não pôde ser lido do adaptador.",
+                    "O OpenVPN conectou, mas não foi possível obter o endereço IP do túnel.",
                     profile,
                     cancellationToken);
             }
@@ -130,7 +135,7 @@ internal sealed class OpenVpnConnection(
         {
             logger.LogError(ex, "Falha ao conectar via OpenVPN");
             await DisconnectAsync(CancellationToken.None);
-            return VpnConnectionResult.Failed(VpnLinkStatus.Error, $"Falha ao conectar via OpenVPN: {ex.Message}");
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, $"Não foi possível conectar pelo OpenVPN. Detalhes: {ex.Message}");
         }
     }
 
@@ -268,7 +273,7 @@ internal sealed class OpenVpnConnection(
         if (!process.Start())
         {
             process.Dispose();
-            throw new InvalidOperationException("Não foi possível iniciar o processo do OpenVPN.");
+            throw new InvalidOperationException("O Windows não conseguiu iniciar o OpenVPN.");
         }
 
         process.BeginOutputReadLine();
@@ -346,8 +351,8 @@ internal sealed class OpenVpnConnection(
             : ReadLogTail(profile.LogPath);
 
         var message = exited
-            ? $"O cliente OpenVPN encerrou (código {process.ExitCode}) antes de abrir a interface de gerenciamento."
-            : "Não foi possível falar com a interface de gerenciamento do OpenVPN.";
+            ? $"O OpenVPN encerrou com o código {process.ExitCode} antes de iniciar a interface de gerenciamento."
+            : "A interface de gerenciamento do OpenVPN não respondeu.";
 
         return string.IsNullOrWhiteSpace(detail) ? message : $"{message} Detalhes: {detail}";
     }
@@ -486,15 +491,15 @@ internal sealed class OpenVpnConnection(
         var tail = ReadLogTail(profile.LogPath);
         var reason = state switch
         {
-            OpenVpnState.AuthFailed => "o servidor exigiu ou recusou o usuário/senha",
-            OpenVpnState.Exiting => "o cliente OpenVPN encerrou antes de conectar",
-            OpenVpnState.Reconnecting => "o cliente ficou tentando reconectar",
-            _ => "a conexão não foi estabelecida a tempo",
+            OpenVpnState.AuthFailed => "o servidor recusou a autenticação. Confira usuário e senha",
+            OpenVpnState.Exiting => "o OpenVPN encerrou antes de concluir a conexão",
+            OpenVpnState.Reconnecting => "o OpenVPN não conseguiu estabelecer a conexão e está tentando novamente",
+            _ => "o tempo limite para estabelecer a conexão foi atingido",
         };
 
         return string.IsNullOrWhiteSpace(tail)
-            ? $"Falha na conexão OpenVPN: {reason}."
-            : $"Falha na conexão OpenVPN: {reason}. Últimas linhas do log: {tail}";
+            ? $"Não foi possível conectar pelo OpenVPN: {reason}."
+            : $"Não foi possível conectar pelo OpenVPN: {reason}. Detalhes do log: {tail}";
     }
 
     private string ReadLogTail(string logPath, int lines = 6)

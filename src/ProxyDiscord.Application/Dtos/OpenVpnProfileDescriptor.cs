@@ -7,4 +7,23 @@ public sealed record OpenVpnProfileDescriptor(
     string FilePath,
     string ConfigBase64,
     HostEndpoint Endpoint,
-    TransportProtocol Transport);
+    TransportProtocol Transport,
+    OpenVpnAuthenticationInfo Authentication);
+
+public sealed record OpenVpnAuthenticationInfo(
+    OpenVpnAuthenticationKind Kind,
+    bool ProfileOptionAvailable);
+
+public enum OpenVpnAuthenticationKind
+{
+    InlineCredentials,
+    ExternalCredentialsFile,
+    InteractivePrompt,
+    NoUsernamePasswordDirective
+}
+
+public enum OpenVpnCredentialSource
+{
+    Profile,
+    Local
+}

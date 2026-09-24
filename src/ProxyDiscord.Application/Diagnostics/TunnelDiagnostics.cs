@@ -85,7 +85,7 @@ public sealed class TunnelDiagnostics
     public void CaptureFailed(int win32Error, string stage)
     {
         Volatile.Write(ref _lastCaptureError, win32Error);
-        Record(DiagnosticSeverity.Error, $"Captura interrompida · {stage} · Win32 {win32Error}");
+        Record(DiagnosticSeverity.Error, $"Falha na captura: {stage} (código Win32 {win32Error}).");
     }
 
     public void OwnerResolved(bool fromSocketLayer)
@@ -107,7 +107,7 @@ public sealed class TunnelDiagnostics
     public void Ipv6Blocked(TransportProtocol protocol, ushort localPort)
     {
         Interlocked.Increment(ref _ipv6Dropped);
-        Record(DiagnosticSeverity.Info, $"IPv6 descartado · {protocol} porta {localPort}");
+        Record(DiagnosticSeverity.Info, $"Tráfego IPv6 ignorado: {protocol}, porta local {localPort}.");
     }
 
     public void TargetMatched(TransportProtocol protocol) => For(protocol).OnMatched();
@@ -115,7 +115,7 @@ public sealed class TunnelDiagnostics
     public void PacketRedirected(TransportProtocol protocol, string destination)
     {
         For(protocol).OnRedirected();
-        Record(DiagnosticSeverity.Info, $"{protocol} → {destination} · redirecionado");
+        Record(DiagnosticSeverity.Info, $"Pacote {protocol} para {destination} redirecionado.");
     }
 
     public void InjectionSucceeded()
@@ -127,20 +127,20 @@ public sealed class TunnelDiagnostics
     {
         Interlocked.Increment(ref _injectFailed);
         Volatile.Write(ref _lastInjectError, win32Error);
-        Record(DiagnosticSeverity.Error, $"Reinjeção falhou · {leg} · Win32 {win32Error}");
+        Record(DiagnosticSeverity.Error, $"Falha ao reinjetar pacote ({leg}; código Win32 {win32Error}).");
     }
 
     public void UpstreamConnected(TransportProtocol protocol, string destination, string localEndpoint)
     {
         For(protocol).OnUpstreamOk();
-        Record(DiagnosticSeverity.Info, $"{protocol} {localEndpoint} → {destination} · estabelecido");
+        Record(DiagnosticSeverity.Info, $"Conexão {protocol} de {localEndpoint} para {destination} estabelecida.");
         Raise();
     }
 
     public void UpstreamFailed(TransportProtocol protocol, string destination, string reason)
     {
         For(protocol).OnUpstreamFailed();
-        Record(DiagnosticSeverity.Error, $"{protocol} → {destination} · recusado · {reason}");
+        Record(DiagnosticSeverity.Error, $"Falha na conexão {protocol} para {destination}: {reason}.");
         Raise();
     }
 
@@ -152,7 +152,7 @@ public sealed class TunnelDiagnostics
         EgressSelfTest = result;
         Record(
             result.Success ? DiagnosticSeverity.Info : DiagnosticSeverity.Error,
-            $"Autoteste · {result.Summary}");
+            $"Teste de saída: {result.Summary}");
         Raise();
     }
 
@@ -167,24 +167,24 @@ public sealed class TunnelDiagnostics
     public string BuildReport()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Diagnóstico do túnel");
-        sb.AppendLine($"Escopo             {DescribeScope(Scope)}");
-        sb.AppendLine($"Captura            {NetworkPacketsSeen} pacotes · {SocketEventsSeen} eventos de socket" +
-                      (LastCaptureError == 0 ? "" : $" · Win32 {LastCaptureError}"));
-        sb.AppendLine($"Processo           {PidFromSocketLayer} socket · {PidFromIpHelper} IP Helper · {PidUnresolved} sem dono");
-        sb.AppendLine($"Alvo               {MatchedTarget} de {MatchedTarget + NotTarget}");
-        sb.AppendLine($"Redirecionamento   TCP {Tcp.Redirected} · UDP {Udp.Redirected} · IPv6 descartado {Ipv6Dropped}");
-        sb.AppendLine($"Saída VPN          TCP {Tcp.UpstreamOk}/{Tcp.UpstreamFailed} · UDP {Udp.UpstreamOk}/{Udp.UpstreamFailed} (ok/falhas)");
-        sb.AppendLine($"Retorno            TCP {FormatBytes(Tcp.BytesUp)}↑ {FormatBytes(Tcp.BytesDown)}↓ · " +
-                      $"UDP {FormatBytes(Udp.BytesUp)}↑ {FormatBytes(Udp.BytesDown)}↓");
-        sb.AppendLine($"Reinjeção          {InjectOk} ok · {InjectFailed} falhas" +
-                      (LastInjectError == 0 ? "" : $" · Win32 {LastInjectError}"));
-        sb.AppendLine($"Autoteste          {EgressSelfTest?.Summary ?? "não executado"}");
+        sb.AppendLine("Diagnóstico da conexão");
+        sb.AppendLine($"Protocolos roteados {DescribeScope(Scope)}");
+        sb.AppendLine($"Captura de tráfego  {NetworkPacketsSeen} pacotes; {SocketEventsSeen} eventos de socket" +
+                      (LastCaptureError == 0 ? "" : $"; código Win32 {LastCaptureError}"));
+        sb.AppendLine($"Identificação de PID {PidFromSocketLayer} por socket; {PidFromIpHelper} via IP Helper; {PidUnresolved} sem PID");
+        sb.AppendLine($"Processo monitorado {MatchedTarget} pacotes de {MatchedTarget + NotTarget} avaliados");
+        sb.AppendLine($"Redirecionamento   TCP {Tcp.Redirected}; UDP {Udp.Redirected}; IPv6 ignorado {Ipv6Dropped}");
+        sb.AppendLine($"Conexões pela VPN  TCP {Tcp.UpstreamOk} ok/{Tcp.UpstreamFailed} falhas; UDP {Udp.UpstreamOk} ok/{Udp.UpstreamFailed} falhas");
+        sb.AppendLine($"Dados transferidos TCP {FormatBytes(Tcp.BytesUp)} enviados, {FormatBytes(Tcp.BytesDown)} recebidos; " +
+                      $"UDP {FormatBytes(Udp.BytesUp)} enviados, {FormatBytes(Udp.BytesDown)} recebidos");
+        sb.AppendLine($"Pacotes reinjetados {InjectOk} ok; {InjectFailed} falhas" +
+                      (LastInjectError == 0 ? "" : $"; código Win32 {LastInjectError}"));
+        sb.AppendLine($"Teste de saída      {EgressSelfTest?.Summary ?? "Não executado"}");
         sb.AppendLine();
-        sb.AppendLine("Eventos");
+        sb.AppendLine("Eventos recentes");
         foreach (var evt in _events.Reverse().Take(40))
         {
-            sb.AppendLine($"  {evt.TimestampUtc.ToLocalTime():HH:mm:ss.fff}  {evt.Severity,-7}  {evt.Message}");
+            sb.AppendLine($"  {evt.TimestampUtc.ToLocalTime():HH:mm:ss.fff}  {DescribeSeverity(evt.Severity),-13}  {evt.Message}");
         }
 
         return sb.ToString();
@@ -195,6 +195,14 @@ public sealed class TunnelDiagnostics
         TunnelProtocolScope.TcpOnly => "TCP",
         TunnelProtocolScope.UdpOnly => "UDP",
         _ => "TCP e UDP",
+    };
+
+    public static string DescribeSeverity(DiagnosticSeverity severity) => severity switch
+    {
+        DiagnosticSeverity.Info => "Informação",
+        DiagnosticSeverity.Warning => "Aviso",
+        DiagnosticSeverity.Error => "Erro",
+        _ => "Evento",
     };
 
     public static string FormatBytes(long bytes) => bytes switch

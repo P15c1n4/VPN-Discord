@@ -1,7 +1,9 @@
+using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ProxyDiscord.Application.Diagnostics;
+using ProxyDiscord.Application.Dtos;
 using ProxyDiscord.Application.Ports;
 using ProxyDiscord.Application.Session;
 using ProxyDiscord.Application.Vpn;
@@ -12,6 +14,7 @@ using ProxyDiscord.Infrastructure.ProcessManagement;
 using ProxyDiscord.Infrastructure.Ras;
 using ProxyDiscord.Infrastructure.Routing;
 using ProxyDiscord.Infrastructure.StateStore;
+using ProxyDiscord.Infrastructure.Updates;
 using ProxyDiscord.Infrastructure.VpnGate;
 using ProxyDiscord.Infrastructure.WinDivert;
 using ProxyDiscord.Presentation.Wpf.Logging;
@@ -43,6 +46,7 @@ internal static class CompositionRoot
         services.AddOpenVpnManagement();
         services.AddProcessRouting();
         services.AddWinDivertPacketCapture();
+        services.AddReleaseUpdates();
         services.AddConnectionStateStore();
 
         services.AddSingleton<TunnelDiagnostics>();
@@ -55,8 +59,11 @@ internal static class CompositionRoot
         services.AddSingleton<ConnectVpnUseCase>();
         services.AddSingleton<LoadOpenVpnProfileUseCase>();
         services.AddSingleton<DisconnectVpnUseCase>();
+        services.AddSingleton<SavedCredentialsUseCase>();
         services.AddSingleton<VpnConnectionSupervisor>();
         services.AddSingleton<CleanupStaleStateOnStartupUseCase>();
+        services.AddSingleton<CheckForUpdatesUseCase>();
+        services.AddSingleton<LaunchUpdateUseCase>();
 
         services.AddSingleton<VpnGateListViewModel>();
         services.AddSingleton<DiagnosticsViewModel>();
@@ -68,6 +75,10 @@ internal static class CompositionRoot
         services.AddSingleton<Func<ProcessPickerWindowResult?>>(sp => () => OpenProcessPicker(sp));
         services.AddSingleton<BrowseForExecutable>(_ => PickExecutable);
         services.AddSingleton<BrowseForOpenVpnProfile>(_ => PickOpenVpnProfile);
+        services.AddSingleton<ChooseOpenVpnCredentialSource>(_ => ChooseOpenVpnCredentialSourceDialog);
+        services.AddSingleton<ConfirmUpdatePrompt>(_ => ShowUpdatePrompt);
+        services.AddSingleton<UpdateCheckMessage>(_ => ShowUpdateCheckMessage);
+        services.AddSingleton<ExitForUpdate>(_ => ExitApplicationForUpdate);
         services.AddSingleton<Action>(sp => () => ShowDiagnostics(sp));
 
         var provider = services.BuildServiceProvider();
@@ -90,7 +101,7 @@ internal static class CompositionRoot
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Selecione o executável a ser tunelado",
+            Title = "Selecione o executável do aplicativo",
             Filter = "Executáveis (*.exe)|*.exe|Todos os arquivos (*.*)|*.*",
             CheckFileExists = true,
         };
@@ -102,12 +113,56 @@ internal static class CompositionRoot
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Selecione o arquivo de configuração OpenVPN",
-            Filter = "Perfil OpenVPN (*.ovpn;*.conf)|*.ovpn;*.conf|Todos os arquivos (*.*)|*.*",
+            Title = "Selecione um perfil OpenVPN",
+            Filter = "Perfis OpenVPN (*.ovpn;*.conf)|*.ovpn;*.conf|Todos os arquivos (*.*)|*.*",
             CheckFileExists = true,
         };
 
         return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    private static OpenVpnCredentialSource? ChooseOpenVpnCredentialSourceDialog(
+        OpenVpnAuthenticationInfo authentication,
+        bool localCredentialsAvailable)
+    {
+        var window = new OpenVpnAuthenticationChoiceWindow(authentication, localCredentialsAvailable);
+        if (System.Windows.Application.Current?.MainWindow is { } owner && !ReferenceEquals(owner, window))
+        {
+            window.Owner = owner;
+        }
+
+        return window.ShowDialog() == true ? window.SelectedSource : null;
+    }
+
+    private static bool ShowUpdatePrompt(Version currentVersion, UpdateReleaseInfo release)
+    {
+        var window = new UpdateAvailableWindow(currentVersion, release);
+        if (System.Windows.Application.Current?.MainWindow is { } owner && !ReferenceEquals(owner, window))
+        {
+            window.Owner = owner;
+        }
+
+        return window.ShowDialog() == true && window.UpdateAccepted;
+    }
+
+    private static void ShowUpdateCheckMessage(string message) =>
+        MessageBox.Show(
+            System.Windows.Application.Current?.MainWindow,
+            message,
+            "Atualização do Discord-VPN",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+
+    private static void ExitApplicationForUpdate()
+    {
+        if (System.Windows.Application.Current is App app)
+        {
+            app.ExitForUpdate();
+        }
+        else
+        {
+            System.Windows.Application.Current?.Shutdown();
+        }
     }
 
     private static ProcessPickerWindowResult? OpenProcessPicker(IServiceProvider serviceProvider)
