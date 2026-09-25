@@ -19,7 +19,8 @@ internal sealed class WinDivertHandle : IWinDivertHandle
 
     public WinDivertHandle(string filter, int bufferSize = ushort.MaxValue)
     {
-        _handle = WinDivertNative.WinDivertOpen(filter, WinDivertLayer.Network, 0, (ulong)WinDivertOpenFlags.None);
+        _handle = WinDivertNative.WinDivertOpen(
+            filter, WinDivertLayer.Network, WinDivertNative.HANDLE_PRIORITY, (ulong)WinDivertOpenFlags.None);
         if (_handle == WinDivertNative.INVALID_HANDLE_VALUE)
         {
             var error = Marshal.GetLastWin32Error();

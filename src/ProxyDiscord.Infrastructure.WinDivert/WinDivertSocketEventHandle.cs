@@ -14,7 +14,7 @@ internal sealed class WinDivertSocketEventHandle : IWinDivertSocketEvents
     public WinDivertSocketEventHandle(string filter)
     {
         const ulong FLAGS = (ulong)(WinDivertOpenFlags.Sniff | WinDivertOpenFlags.RecvOnly);
-        _handle = WinDivertNative.WinDivertOpen(filter, WinDivertLayer.Socket, 0, FLAGS);
+        _handle = WinDivertNative.WinDivertOpen(filter, WinDivertLayer.Socket, WinDivertNative.HANDLE_PRIORITY, FLAGS);
         if (_handle == WinDivertNative.INVALID_HANDLE_VALUE)
         {
             var error = Marshal.GetLastWin32Error();
