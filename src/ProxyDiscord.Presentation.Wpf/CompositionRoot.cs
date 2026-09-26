@@ -28,16 +28,25 @@ internal static class CompositionRoot
     public static IServiceProvider Build(Dispatcher dispatcher)
     {
         var services = new ServiceCollection();
+        var sessionContext = new RoutingSessionContext();
 
         services.AddLogging(builder =>
         {
             builder.SetMinimumLevel(LogLevel.Debug);
             builder.AddFilter("System.Net.Http", LogLevel.Warning);
             builder.AddFilter("Microsoft", LogLevel.Warning);
-            builder.AddProvider(new FileLoggerProvider());
+            builder.AddProvider(new FileLoggerProvider(() => new Dictionary<string, object?>
+            {
+                ["status"] = sessionContext.Status.ToString(),
+                ["targetProcessName"] = sessionContext.TargetProcess?.Name,
+                ["targetProcessPid"] = sessionContext.TargetProcess?.Pid,
+                ["latencyMilliseconds"] = sessionContext.Latency?.TotalMilliseconds,
+                ["lastError"] = sessionContext.LastError,
+            }));
         });
 
         services.AddSingleton(dispatcher);
+        services.AddSingleton(sessionContext);
 
         services.AddProcessManagement();
         services.AddVpnGateIntegration();
@@ -51,7 +60,7 @@ internal static class CompositionRoot
 
         services.AddSingleton<TunnelDiagnostics>();
         services.AddSingleton<IVpnConnection, VpnConnectionRouter>();
-        services.AddSingleton<RoutingSessionContext>();
+        services.AddSingleton<RoutingSessionContext>(sessionContext);
         services.AddSingleton<IRoutingSessionContext>(sp => sp.GetRequiredService<RoutingSessionContext>());
         services.AddSingleton<DiscoverRunningProcessesUseCase>();
         services.AddSingleton<FetchVpnGateListUseCase>();

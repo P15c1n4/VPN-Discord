@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ProxyDiscord.Infrastructure.OpenVpn.Tests" />
+    <InternalsVisibleTo Include="ProxyDiscord.Application.Tests" />
   </ItemGroup>
 
   <!--

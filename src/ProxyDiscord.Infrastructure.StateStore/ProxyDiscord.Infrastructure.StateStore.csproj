@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ProxyDiscord.Infrastructure.StateStore.Tests" />
+    <InternalsVisibleTo Include="ProxyDiscord.Application.Tests" />
   </ItemGroup>
 
 </Project>

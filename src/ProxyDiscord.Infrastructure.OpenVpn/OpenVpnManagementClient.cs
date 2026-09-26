@@ -21,7 +21,7 @@ internal sealed class OpenVpnStateChangedEventArgs(OpenVpnState state, string? m
     public string? Message { get; } = message;
 }
 
-internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
+internal sealed class OpenVpnManagementClient(ILogger logger, string? username = null, string? password = null) : IDisposable
 {
     private static readonly TimeSpan CONNECT_RETRY_DELAY = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan COMMAND_ACK_TIMEOUT = TimeSpan.FromSeconds(5);
@@ -29,6 +29,7 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
     private TcpClient? _client;
     private StreamReader? _reader;
     private StreamWriter? _writer;
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
 
     public OpenVpnState State { get; private set; } = OpenVpnState.Unknown;
 
@@ -49,8 +50,9 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
 
                 _client = client;
                 var stream = client.GetStream();
-                _reader = new StreamReader(stream, Encoding.ASCII);
-                _writer = new StreamWriter(stream, Encoding.ASCII) { AutoFlush = true };
+                var protocolEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                _reader = new StreamReader(stream, protocolEncoding);
+                _writer = new StreamWriter(stream, protocolEncoding) { AutoFlush = true };
 
                 await SendCommandAsync("state on", cancellationToken);
                 await SendCommandAsync("hold release", cancellationToken);
@@ -80,7 +82,7 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
                     break;
                 }
 
-                HandleLine(line);
+                await HandleLineAsync(line);
 
                 if (State is OpenVpnState.Connected or OpenVpnState.AuthFailed or OpenVpnState.Exiting)
                 {
@@ -109,7 +111,7 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
         {
             while (!cancellationToken.IsCancellationRequested && await reader.ReadLineAsync(cancellationToken) is { } line)
             {
-                HandleLine(line);
+                await HandleLineAsync(line);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -132,19 +134,40 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
         }
     }
 
-    private void HandleLine(string line)
+    private async Task HandleLineAsync(string line)
     {
-        logger.LogDebug("openvpn management: {Line}", line);
+        // Management notifications may contain authentication tokens or challenge details.
+        // Keep their raw contents out of persistent logs.
+        if (!line.StartsWith(">PASSWORD:", StringComparison.Ordinal))
+        {
+            logger.LogDebug("OpenVPN management event received ({EventType}).", line.Split(':', 2)[0]);
+        }
 
         var previousState = State;
 
         if (!line.StartsWith(">STATE:", StringComparison.Ordinal))
         {
-            if (line.StartsWith(">PASSWORD:Verification Failed", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith(">PASSWORD:Need 'Auth' username/password", StringComparison.OrdinalIgnoreCase))
+            if (line.StartsWith(">PASSWORD:Need 'Auth' username/password", StringComparison.OrdinalIgnoreCase))
+            {
+                if (line.Contains(" SC:", StringComparison.OrdinalIgnoreCase))
+                {
+                    State = OpenVpnState.AuthFailed;
+                    LastStateMessage = "O servidor exige um desafio adicional de autenticação não compatível com este cliente.";
+                }
+                else if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+                {
+                    State = OpenVpnState.AuthFailed;
+                    LastStateMessage = "O OpenVPN solicitou credenciais, mas não há credenciais disponíveis em memória.";
+                }
+                else
+                {
+                    await SendCredentialResponseAsync(username, password);
+                }
+            }
+            else if (line.StartsWith(">PASSWORD:Verification Failed", StringComparison.OrdinalIgnoreCase))
             {
                 State = OpenVpnState.AuthFailed;
-                LastStateMessage = line;
+                LastStateMessage = "O servidor recusou as credenciais de autenticação.";
             }
 
             NotifyStateChange(previousState);
@@ -190,11 +213,35 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
         }
     }
 
+    private async Task SendCredentialResponseAsync(string user, string secret)
+    {
+        if (user.Contains('\r') || user.Contains('\n') || secret.Contains('\r') || secret.Contains('\n'))
+        {
+            State = OpenVpnState.AuthFailed;
+            LastStateMessage = "As credenciais contêm caracteres de controle não aceitos pelo OpenVPN.";
+            return;
+        }
+
+        await SendAsync($"username \"Auth\" {Quote(user)}");
+        await SendAsync($"password \"Auth\" {Quote(secret)}");
+    }
+
+    private static string Quote(string value) =>
+        $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+
     private async Task SendAsync(string command)
     {
         if (_writer is { } writer)
         {
-            await writer.WriteLineAsync(command);
+            await _writeGate.WaitAsync();
+            try
+            {
+                await writer.WriteLineAsync(command);
+            }
+            finally
+            {
+                _writeGate.Release();
+            }
         }
     }
 
@@ -214,7 +261,7 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
         {
             while (await reader.ReadLineAsync(timeoutCts.Token) is { } line)
             {
-                HandleLine(line);
+                await HandleLineAsync(line);
 
                 if (line.StartsWith("SUCCESS:", StringComparison.Ordinal) ||
                     line.StartsWith("ERROR:", StringComparison.Ordinal))
@@ -240,5 +287,6 @@ internal sealed class OpenVpnManagementClient(ILogger logger) : IDisposable
         _reader = null;
         _writer = null;
         _client = null;
+        _writeGate.Dispose();
     }
 }

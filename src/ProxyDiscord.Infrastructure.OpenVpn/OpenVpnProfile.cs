@@ -8,10 +8,8 @@ namespace ProxyDiscord.Infrastructure.OpenVpn;
 internal sealed record OpenVpnProfile(
     string Directory,
     string ConfigPath,
-    string CredentialsPath,
     string UpScriptPath,
-    string TunnelInfoPath,
-    string LogPath) : IDisposable
+    string TunnelInfoPath) : IDisposable
 {
     public void Dispose()
     {
@@ -30,8 +28,7 @@ internal sealed record OpenVpnProfile(
 
 internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger, string? rootDirectory = null)
 {
-    private static readonly string DEFAULT_ROOT_DIRECTORY = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ProxyDiscord", "openvpn");
+    private static readonly string DEFAULT_ROOT_DIRECTORY = Path.Combine(AppContext.BaseDirectory, "openvpn", "sessions");
 
     private readonly string _rootDirectory = rootDirectory ?? DEFAULT_ROOT_DIRECTORY;
 
@@ -69,18 +66,11 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         var profile = new OpenVpnProfile(
             sessionDirectory,
             Path.Combine(sessionDirectory, "session.ovpn"),
-            Path.Combine(sessionDirectory, "auth.txt"),
             Path.Combine(sessionDirectory, "up.bat"),
-            Path.Combine(sessionDirectory, "tunnel.txt"),
-            Path.Combine(sessionDirectory, "openvpn.log"));
+            Path.Combine(sessionDirectory, "tunnel.json"));
 
         try
         {
-            if (hasCredentials)
-            {
-                File.WriteAllText(profile.CredentialsPath, $"{username}\n{password}\n", new UTF8Encoding(false));
-            }
-
             File.WriteAllText(profile.UpScriptPath, BuildUpScript(profile.TunnelInfoPath), Encoding.ASCII);
             File.WriteAllText(
                 profile.ConfigPath,
@@ -139,8 +129,9 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
 
         if (hasCredentials)
         {
-            builder.AppendLine("# Credenciais em arquivo: não há console para o OpenVPN pedir usuário e senha.");
-            builder.AppendLine($"auth-user-pass {Quote(profile.CredentialsPath)}");
+            builder.AppendLine("# Credenciais respondidas pela interface de gerenciamento e mantidas em memória.");
+            builder.AppendLine("auth-user-pass");
+            builder.AppendLine("management-query-passwords");
             builder.AppendLine();
         }
 
@@ -161,7 +152,6 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         builder.AppendLine("management-hold");
         builder.AppendLine();
 
-        builder.AppendLine($"log {Quote(profile.LogPath)}");
         builder.AppendLine("verb 3");
         builder.AppendLine("connect-retry-max 2");
         builder.AppendLine("resolv-retry 20");
@@ -290,11 +280,8 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
     {
         var builder = new StringBuilder();
         builder.AppendLine("@echo off");
-        builder.AppendLine($"> \"{tunnelInfoPath}\" echo dev=%dev%");
-        builder.AppendLine($">> \"{tunnelInfoPath}\" echo ifconfig_local=%ifconfig_local%");
-        builder.AppendLine($">> \"{tunnelInfoPath}\" echo ifconfig_remote=%ifconfig_remote%");
-        builder.AppendLine($">> \"{tunnelInfoPath}\" echo ifconfig_netmask=%ifconfig_netmask%");
-        builder.AppendLine($">> \"{tunnelInfoPath}\" echo route_vpn_gateway=%route_vpn_gateway%");
+        builder.AppendLine(
+            $"> \"{tunnelInfoPath}\" echo {{\"dev\":\"%dev%\",\"ifconfig_local\":\"%ifconfig_local%\",\"ifconfig_remote\":\"%ifconfig_remote%\",\"ifconfig_netmask\":\"%ifconfig_netmask%\",\"route_vpn_gateway\":\"%route_vpn_gateway%\"}}");
         builder.AppendLine("exit /b 0");
         return builder.ToString();
     }
@@ -325,11 +312,8 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         }
     }
 
-    // Administradores e SYSTEM porque o auth.txt guarda usuário e senha em texto puro. A identidade
-    // do próprio processo entra junto: sem ela o writer se tranca para fora dos arquivos que acabou
-    // de criar — a herança é removida no mesmo passo — e nem o Dispose consegue apagar o diretório,
-    // que fica vazando credenciais. Em produção o app roda elevado e esse SID já está coberto por
-    // Administradores; num processo não elevado é o que mantém o writer utilizável.
+    // O conteúdo da sessão pode conter detalhes do servidor e arquivos de execução temporários.
+    // Incluímos a identidade atual para que o processo consiga remover a própria pasta ao encerrar.
     private static IEnumerable<IdentityReference> GrantedIdentities()
     {
         yield return new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);

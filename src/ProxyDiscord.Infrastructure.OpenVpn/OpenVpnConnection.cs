@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ProxyDiscord.Application.Dtos;
 using ProxyDiscord.Application.Ports;
@@ -42,6 +43,19 @@ internal sealed class OpenVpnConnection(
     public async Task<VpnConnectionResult> ConnectAsync(
         VpnConnectionRequest request, CancellationToken cancellationToken = default)
     {
+        using var logScope = logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["request"] = new Dictionary<string, object?>
+            {
+                ["host"] = request.Endpoint.Host,
+                ["port"] = request.Endpoint.Port,
+                ["protocol"] = request.Protocol.ToString(),
+                ["entryName"] = request.EntryNameHint,
+                ["profileCredentials"] = request.UseProfileOpenVpnCredentials,
+            },
+            ["response"] = null,
+        });
+
         if (!binaries.IsAvailable)
         {
             return VpnConnectionResult.Failed(
@@ -89,7 +103,7 @@ internal sealed class OpenVpnConnection(
                 _process = process;
             }
 
-            var management = new OpenVpnManagementClient(logger);
+            var management = new OpenVpnManagementClient(logger, request.Username, request.Password);
             lock (_lock)
             {
                 _management = management;
@@ -98,13 +112,13 @@ internal sealed class OpenVpnConnection(
             if (!await management.ConnectAsync(managementPort, MANAGEMENT_CONNECT_TIMEOUT, cancellationToken))
             {
                 return await FailAsync(
-                    DescribeStartupFailure(process, console, profile), profile, cancellationToken);
+                    DescribeStartupFailure(process, console), cancellationToken);
             }
 
             var state = await management.WaitForConnectedAsync(CONNECT_TIMEOUT, cancellationToken);
             if (state != OpenVpnState.Connected)
             {
-                return await FailAsync(DescribeFailure(state, profile), profile, cancellationToken);
+                return await FailAsync(DescribeFailure(state, console), cancellationToken);
             }
 
             var adapterInfo = await ResolveAdapterInfoAsync(profile, adapterName, cancellationToken);
@@ -112,7 +126,6 @@ internal sealed class OpenVpnConnection(
             {
                 return await FailAsync(
                     "O OpenVPN conectou, mas não foi possível obter o endereço IP do túnel.",
-                    profile,
                     cancellationToken);
             }
 
@@ -266,8 +279,8 @@ internal sealed class OpenVpnConnection(
         startInfo.ArgumentList.Add(profile.ConfigPath);
 
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        process.OutputDataReceived += (_, e) => AppendConsole(console, e.Data);
-        process.ErrorDataReceived += (_, e) => AppendConsole(console, e.Data);
+        process.OutputDataReceived += (_, e) => RecordConsoleLine(console, e.Data);
+        process.ErrorDataReceived += (_, e) => RecordConsoleLine(console, e.Data);
         process.Exited += (_, _) => OnProcessExited(process);
 
         if (!process.Start())
@@ -281,6 +294,26 @@ internal sealed class OpenVpnConnection(
 
         logger.LogInformation("OpenVPN iniciado (PID {Pid}) com o perfil {Config}", process.Id, profile.ConfigPath);
         return process;
+    }
+
+    private void RecordConsoleLine(StringBuilder console, string? line)
+    {
+        AppendConsole(console, line);
+        if (!string.IsNullOrWhiteSpace(line))
+        {
+            logger.LogDebug("OpenVPN: {Line}", RedactOpenVpnLogLine(line));
+        }
+    }
+
+    private static string RedactOpenVpnLogLine(string line)
+    {
+        var trimmed = line.Trim();
+        return trimmed.Contains("PASSWORD:", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains("Auth-Token", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains("username", StringComparison.OrdinalIgnoreCase) &&
+               trimmed.Contains("password", StringComparison.OrdinalIgnoreCase)
+            ? "[evento de autenticação do OpenVPN omitido]"
+            : trimmed;
     }
 
     private void OnManagementStateChanged(object? sender, OpenVpnStateChangedEventArgs args)
@@ -326,6 +359,8 @@ internal sealed class OpenVpnConnection(
 
     private static void AppendConsole(StringBuilder console, string? line)
     {
+        const int MAX_BUFFER_CHARACTERS = 32 * 1024;
+
         if (string.IsNullOrWhiteSpace(line))
         {
             return;
@@ -334,21 +369,17 @@ internal sealed class OpenVpnConnection(
         lock (console)
         {
             console.AppendLine(line.Trim());
+            if (console.Length > MAX_BUFFER_CHARACTERS)
+            {
+                console.Remove(0, console.Length - (MAX_BUFFER_CHARACTERS / 2));
+            }
         }
     }
 
-    private string DescribeStartupFailure(Process process, StringBuilder console, OpenVpnProfile profile)
+    private string DescribeStartupFailure(Process process, StringBuilder console)
     {
-        string consoleText;
-        lock (console)
-        {
-            consoleText = console.ToString().Trim();
-        }
-
         var exited = process.HasExited;
-        var detail = !string.IsNullOrEmpty(consoleText)
-            ? consoleText.Replace(Environment.NewLine, " | ")
-            : ReadLogTail(profile.LogPath);
+        var detail = GetConsoleTail(console);
 
         var message = exited
             ? $"O OpenVPN encerrou com o código {process.ExitCode} antes de iniciar a interface de gerenciamento."
@@ -460,21 +491,14 @@ internal sealed class OpenVpnConnection(
             {
                 try
                 {
-                    var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var line in await File.ReadAllLinesAsync(path, cancellationToken))
-                    {
-                        var separator = line.IndexOf('=');
-                        if (separator > 0)
-                        {
-                            values[line[..separator].Trim()] = line[(separator + 1)..].Trim();
-                        }
-                    }
+                    var json = await File.ReadAllTextAsync(path, cancellationToken);
+                    var values = JsonSerializer.Deserialize<Dictionary<string, string>>(json)
+                                 ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-                    logger.LogDebug("Parâmetros do túnel OpenVPN: {Values}",
-                        string.Join(", ", values.Select(pair => $"{pair.Key}={pair.Value}")));
+                    logger.LogDebug("Parâmetros do túnel OpenVPN recebidos em JSON ({Count} campos).", values.Count);
                     return values;
                 }
-                catch (IOException)
+                catch (Exception ex) when (ex is IOException or JsonException)
                 {
                 }
             }
@@ -486,9 +510,8 @@ internal sealed class OpenVpnConnection(
         return [];
     }
 
-    private string DescribeFailure(OpenVpnState state, OpenVpnProfile profile)
+    private string DescribeFailure(OpenVpnState state, StringBuilder console)
     {
-        var tail = ReadLogTail(profile.LogPath);
         var reason = state switch
         {
             OpenVpnState.AuthFailed => "o servidor recusou a autenticação. Confira usuário e senha",
@@ -497,37 +520,34 @@ internal sealed class OpenVpnConnection(
             _ => "o tempo limite para estabelecer a conexão foi atingido",
         };
 
-        return string.IsNullOrWhiteSpace(tail)
+        var detail = GetConsoleTail(console);
+        return string.IsNullOrWhiteSpace(detail)
             ? $"Não foi possível conectar pelo OpenVPN: {reason}."
-            : $"Não foi possível conectar pelo OpenVPN: {reason}. Detalhes do log: {tail}";
-    }
-
-    private string ReadLogTail(string logPath, int lines = 6)
-    {
-        try
-        {
-            if (!File.Exists(logPath))
-            {
-                return string.Empty;
-            }
-
-            using var stream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-            var all = reader.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            return string.Join(" | ", all.TakeLast(lines).Select(line => line.Trim()));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return string.Empty;
-        }
+            : $"Não foi possível conectar pelo OpenVPN: {reason}. Últimas linhas: {detail}";
     }
 
     private async Task<VpnConnectionResult> FailAsync(
-        string message, OpenVpnProfile profile, CancellationToken cancellationToken)
+        string message, CancellationToken cancellationToken)
     {
         logger.LogError("{Message}", message);
         await DisconnectAsync(cancellationToken);
         return VpnConnectionResult.Failed(VpnLinkStatus.Error, message);
+    }
+
+    private static string GetConsoleTail(StringBuilder console)
+    {
+        const int MAX_LINES = 12;
+        const int MAX_CHARACTERS = 1600;
+
+        string[] lines;
+        lock (console)
+        {
+            lines = console.ToString()
+                .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+
+        var tail = string.Join(" | ", lines.TakeLast(MAX_LINES));
+        return tail.Length <= MAX_CHARACTERS ? tail : tail[^MAX_CHARACTERS..];
     }
 
     private async Task WaitOrKillAsync(Process process)

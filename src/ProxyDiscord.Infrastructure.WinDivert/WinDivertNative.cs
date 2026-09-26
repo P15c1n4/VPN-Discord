@@ -5,7 +5,7 @@ namespace ProxyDiscord.Infrastructure.WinDivert;
 internal static class WinDivertNative
 {
     private const string DLL = "WinDivert.dll";
-    internal const short HANDLE_PRIORITY = 772;
+    internal const short HANDLE_PRIORITY = -772;
 
     public static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
 

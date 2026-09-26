@@ -8,8 +8,9 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddConnectionStateStore(this IServiceCollection services)
     {
         services.AddSingleton<IConnectionStateStore, FileConnectionStateStore>();
-        services.AddSingleton<IUserConfigurationStore, JsonUserConfigurationStore>();
-        services.AddSingleton<IServerCredentialsStore, JsonServerCredentialsStore>();
+        services.AddSingleton<JsonApplicationDataStore>();
+        services.AddSingleton<IUserConfigurationStore>(sp => sp.GetRequiredService<JsonApplicationDataStore>());
+        services.AddSingleton<IServerCredentialsStore>(sp => sp.GetRequiredService<JsonApplicationDataStore>());
         services.AddSingleton<ISystemClock, SystemClock>();
         return services;
     }

@@ -13,8 +13,7 @@ public sealed record DiagnosticStage(string Step, string Value, bool IsHealthy);
 public sealed partial class DiagnosticsViewModel : ObservableObject, IDisposable
 {
     private static readonly TimeSpan REFRESH_INTERVAL = TimeSpan.FromSeconds(1);
-    private static readonly string LOG_DIRECTORY = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ProxyDiscord", "logs");
+    private static readonly string LOG_DIRECTORY = Path.Combine(AppContext.BaseDirectory, "logs");
 
     private readonly TunnelDiagnostics _diagnostics;
     private readonly DispatcherTimer _timer;

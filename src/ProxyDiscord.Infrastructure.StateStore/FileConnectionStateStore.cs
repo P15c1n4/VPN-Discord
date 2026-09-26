@@ -12,7 +12,7 @@ public sealed class FileConnectionStateStore : IConnectionStateStore
     private readonly ILogger<FileConnectionStateStore> _logger;
 
     public FileConnectionStateStore(ILogger<FileConnectionStateStore> logger)
-        : this(logger, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ProxyDiscord"))
+        : this(logger, AppContext.BaseDirectory)
     {
     }
 
@@ -21,6 +21,29 @@ public sealed class FileConnectionStateStore : IConnectionStateStore
         _logger = logger;
         Directory.CreateDirectory(directory);
         _stateFilePath = Path.Combine(directory, "state.json");
+        MigrateLegacyState();
+    }
+
+    private void MigrateLegacyState()
+    {
+        var legacyPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ProxyDiscord", "state.json");
+        if (File.Exists(_stateFilePath) || !File.Exists(legacyPath) ||
+            string.Equals(Path.GetFullPath(legacyPath), Path.GetFullPath(_stateFilePath), StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Copy(legacyPath, _stateFilePath, overwrite: false);
+            File.Delete(legacyPath);
+            _logger.LogInformation("Estado de conexão migrado de ProgramData para a pasta da aplicação.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError(ex, "Não foi possível migrar o estado legado de conexão; o arquivo original foi mantido.");
+        }
     }
 
     public async Task WriteActiveStateAsync(ConnectionStateRecord record, CancellationToken cancellationToken = default)

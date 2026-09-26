@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Windows;
 
 namespace ProxyDiscord.Updater;
@@ -28,6 +29,11 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            if (arguments is not null)
+            {
+                WriteFailureLog(arguments, ex);
+            }
+
             var rollbackNote = arguments is not null
                 ? TryRestartInstalledApplication(arguments)
                 : "";
@@ -300,13 +306,70 @@ internal static class Program
 
     private static void PreserveUserFiles(string currentDirectory, string stageDirectory)
     {
-        foreach (var name in new[] { "config.json", "user_auth.json" })
+        foreach (var name in new[] { "config.json", "user_auth.json", "state.json" })
         {
             var source = Path.Combine(currentDirectory, name);
             if (File.Exists(source))
             {
                 File.Copy(source, Path.Combine(stageDirectory, name), overwrite: true);
             }
+        }
+
+        var sourceLogs = Path.Combine(currentDirectory, "logs");
+        if (Directory.Exists(sourceLogs))
+        {
+            CopyDirectory(sourceLogs, Path.Combine(stageDirectory, "logs"));
+        }
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
+        }
+    }
+
+    private static void WriteFailureLog(UpdateArguments arguments, Exception exception)
+    {
+        try
+        {
+            var logDirectory = Path.Combine(Path.GetFullPath(arguments.InstallDirectory), "logs");
+            Directory.CreateDirectory(logDirectory);
+            var entry = new
+            {
+                timestampUtc = DateTimeOffset.UtcNow,
+                level = "Error",
+                category = "ProxyDiscord.Updater",
+                eventId = new { id = 1, name = "UpdateFailed" },
+                message = exception.Message,
+                request = new { operation = "apply-release", downloadHost = "github.com" },
+                response = (object?)null,
+                properties = new Dictionary<string, object?>(),
+                scope = new Dictionary<string, object?>(),
+                exception = new
+                {
+                    type = exception.GetType().FullName,
+                    message = exception.Message,
+                    stackTrace = exception.StackTrace,
+                    fullDetails = exception.ToString(),
+                },
+                appState = new { stage = "updater-caught-exception" },
+            };
+            File.AppendAllText(
+                Path.Combine(logDirectory, $"app-{DateTime.UtcNow:yyyy-MM-dd}.jsonl"),
+                JsonSerializer.Serialize(entry, new JsonSerializerOptions(JsonSerializerDefaults.Web)) + Environment.NewLine);
+        }
+        catch (Exception logError) when (logError is IOException or UnauthorizedAccessException or ArgumentException)
+        {
         }
     }
 

@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.IO;
 using ProxyDiscord.Application.UseCases;
+using ProxyDiscord.Infrastructure.StateStore;
 using ProxyDiscord.Presentation.Wpf.Shell;
 using ProxyDiscord.Presentation.Wpf.Views;
 
@@ -42,7 +44,22 @@ public partial class App : System.Windows.Application
         _singleInstance.ActivationRequested += (_, _) => Dispatcher.Invoke(ShowMainWindow);
         _singleInstance.StartListening();
 
-        _services = CompositionRoot.Build(Dispatcher);
+        try
+        {
+            _services = CompositionRoot.Build(Dispatcher);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            System.Windows.MessageBox.Show(
+                "A pasta do aplicativo precisa permitir gravação para salvar configurações e logs. " +
+                "Mova a versão portátil para uma pasta gravável e tente novamente.\n\n" + ex.Message,
+                "Discord-VPN",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
+            Shutdown();
+            return;
+        }
+
         _logger = _services.GetRequiredService<ILogger<App>>();
 
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
@@ -67,11 +84,19 @@ public partial class App : System.Windows.Application
 
         try
         {
+            await _services.GetRequiredService<JsonApplicationDataStore>().InitializeAsync();
             await _services.GetRequiredService<CleanupStaleStateOnStartupUseCase>().ExecuteAsync();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Falha ao executar a limpeza de estado órfão na inicialização");
+            System.Windows.MessageBox.Show(
+                $"Não foi possível carregar os dados locais do aplicativo.\n\n{ex.Message}",
+                "Discord-VPN",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
+            Shutdown();
+            return;
         }
 
         var mainWindow = _services.GetRequiredService<MainWindow>();
