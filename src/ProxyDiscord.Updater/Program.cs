@@ -4,7 +4,7 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
-using System.Text.Json;
+using System.Text;
 using System.Windows;
 
 namespace ProxyDiscord.Updater;
@@ -342,31 +342,27 @@ internal static class Program
     {
         try
         {
-            var logDirectory = Path.Combine(Path.GetFullPath(arguments.InstallDirectory), "logs");
-            Directory.CreateDirectory(logDirectory);
-            var entry = new
+            var installDirectory = Path.GetFullPath(arguments.InstallDirectory);
+            if (!Directory.Exists(installDirectory))
             {
-                timestampUtc = DateTimeOffset.UtcNow,
-                level = "Error",
-                category = "ProxyDiscord.Updater",
-                eventId = new { id = 1, name = "UpdateFailed" },
-                message = exception.Message,
-                request = new { operation = "apply-release", downloadHost = "github.com" },
-                response = (object?)null,
-                properties = new Dictionary<string, object?>(),
-                scope = new Dictionary<string, object?>(),
-                exception = new
-                {
-                    type = exception.GetType().FullName,
-                    message = exception.Message,
-                    stackTrace = exception.StackTrace,
-                    fullDetails = exception.ToString(),
-                },
-                appState = new { stage = "updater-caught-exception" },
-            };
+                return;
+            }
+
+            var logDirectory = Path.Combine(installDirectory, "logs");
+            Directory.CreateDirectory(logDirectory);
+            var entry = new StringBuilder()
+                .Append(DateTimeOffset.UtcNow.ToString("O"))
+                .AppendLine(" [Error] ProxyDiscord.Updater (evento 1)")
+                .Append("Mensagem: ").AppendLine(exception.Message)
+                .AppendLine("Dados enviados: operação=apply-release, host=github.com")
+                .AppendLine("Resposta recebida: não informada")
+                .Append("Exceção: ").AppendLine(exception.ToString())
+                .Append("Stack trace: ").AppendLine(exception.StackTrace ?? "não disponível")
+                .AppendLine("Estado da aplicação: etapa=updater-caught-exception")
+                .ToString();
             File.AppendAllText(
-                Path.Combine(logDirectory, $"app-{DateTime.UtcNow:yyyy-MM-dd}.jsonl"),
-                JsonSerializer.Serialize(entry, new JsonSerializerOptions(JsonSerializerDefaults.Web)) + Environment.NewLine);
+                Path.Combine(logDirectory, $"app-{DateTime.UtcNow:yyyy-MM-dd}.log"),
+                entry + Environment.NewLine);
         }
         catch (Exception logError) when (logError is IOException or UnauthorizedAccessException or ArgumentException)
         {

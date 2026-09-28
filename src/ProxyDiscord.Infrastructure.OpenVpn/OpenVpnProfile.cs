@@ -9,7 +9,9 @@ internal sealed record OpenVpnProfile(
     string Directory,
     string ConfigPath,
     string UpScriptPath,
-    string TunnelInfoPath) : IDisposable
+    string TunnelInfoPath,
+    string ManagementPasswordFilePath,
+    string ManagementPassword) : IDisposable
 {
     public void Dispose()
     {
@@ -61,20 +63,25 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
 
         var sessionDirectory = Path.Combine(_rootDirectory, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(sessionDirectory);
-        RestrictToAdministrators(sessionDirectory);
 
         var profile = new OpenVpnProfile(
             sessionDirectory,
             Path.Combine(sessionDirectory, "session.ovpn"),
             Path.Combine(sessionDirectory, "up.bat"),
-            Path.Combine(sessionDirectory, "tunnel.json"));
+            Path.Combine(sessionDirectory, "tunnel.json"),
+            Path.Combine(sessionDirectory, "management.pw"),
+            CreateManagementPassword());
 
         try
         {
+            // A senha de gerenciamento só pode ser gravada depois que a pasta estiver protegida.
+            RestrictToAdministrators(sessionDirectory);
+            File.WriteAllText(profile.ManagementPasswordFilePath, profile.ManagementPassword, Encoding.ASCII);
             File.WriteAllText(profile.UpScriptPath, BuildUpScript(profile.TunnelInfoPath), Encoding.ASCII);
             File.WriteAllText(
                 profile.ConfigPath,
-                BuildConfig(published, profile, adapterName, managementPort, hasCredentials, useProfileCredentials),
+                BuildConfig(
+                    published, profile, adapterName, managementPort, hasCredentials, useProfileCredentials),
                 new UTF8Encoding(false));
         }
         catch
@@ -107,7 +114,8 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         bool hasCredentials,
         bool useProfileCredentials)
     {
-        var normalizedPublished = RemoveAppManagedDirectives(published, preserveProfileAuthentication: useProfileCredentials);
+        var normalizedPublished = RemoveAppManagedDirectives(
+            published, preserveProfileAuthentication: useProfileCredentials);
         var builder = new StringBuilder();
         builder.AppendLine("# Gerado por ProxyDiscord. Base: perfil publicado pelo servidor VPN Gate.");
         builder.AppendLine(normalizedPublished.TrimEnd());
@@ -131,9 +139,12 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         {
             builder.AppendLine("# Credenciais respondidas pela interface de gerenciamento e mantidas em memória.");
             builder.AppendLine("auth-user-pass");
-            builder.AppendLine("management-query-passwords");
-            builder.AppendLine();
         }
+
+        // O gerenciamento também atende pedidos de senha de chave privada, mesmo quando
+        // o perfil não usa autenticação por usuário/senha.
+        builder.AppendLine("management-query-passwords");
+        builder.AppendLine();
 
         builder.AppendLine("# Adaptador criado por este app, para não disputar adaptador com outro cliente.");
         builder.AppendLine("windows-driver tap-windows6");
@@ -144,31 +155,74 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
         builder.AppendLine("# up é a forma documentada de capturá-los, e é deles que sai a rota do túnel.");
         builder.AppendLine("script-security 2");
         builder.AppendLine($"up {Quote(profile.UpScriptPath)}");
+        builder.AppendLine("up-restart");
         builder.AppendLine();
 
         builder.AppendLine("# Interface de gerenciamento: é daqui que vem o estado real da conexão, em vez de");
         builder.AppendLine("# adivinhar pelo log ou pelo tempo decorrido.");
-        builder.AppendLine($"management 127.0.0.1 {managementPort}");
+        builder.AppendLine(
+            $"management 127.0.0.1 {managementPort} {Quote(profile.ManagementPasswordFilePath)}");
         builder.AppendLine("management-hold");
         builder.AppendLine();
 
         builder.AppendLine("verb 3");
-        builder.AppendLine("connect-retry-max 2");
-        builder.AppendLine("resolv-retry 20");
         return builder.ToString();
     }
 
     private static readonly HashSet<string> APP_MANAGED_DIRECTIVES = new(StringComparer.OrdinalIgnoreCase)
     {
+        "askpass",
+        "auth-token",
         "auth-user-pass",
+        "auth-user-pass-verify",
         "block-outside-dns",
+        "cd",
+        "client-connect",
+        "client-disconnect",
+        "config",
+        "connect-retry",
+        "connect-retry-max",
+        "connect-timeout",
+        "daemon",
+        "down",
+        "down-pre",
         "dhcp-option",
+        "ipchange",
+        "learn-address",
+        "log",
+        "log-append",
+        "management",
+        "management-client",
+        "management-external-cert",
+        "management-external-key",
+        "management-hold",
+        "management-log-cache",
+        "management-query-passwords",
+        "management-query-proxy",
+        "management-query-remote",
+        "management-signal",
+        "management-up-down",
+        "plugin",
+        "plugin-dir",
         "pull-filter",
         "redirect-gateway",
         "redirect-private",
         "route",
         "route-ipv6",
         "route-nopull",
+        "route-pre-down",
+        "route-up",
+        "resolv-retry",
+        "script-security",
+        "server-poll-timeout",
+        "status",
+        "status-version",
+        "tls-crypt-v2-verify",
+        "tls-export-cert",
+        "tls-verify",
+        "up",
+        "up-restart",
+        "writepid",
     };
 
     private static string RemoveAppManagedDirectives(string config, bool preserveProfileAuthentication)
@@ -215,8 +269,9 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
 
             var separator = line.IndexOfAny([' ', '\t']);
             var directive = separator < 0 ? line : line[..separator];
-            if (!APP_MANAGED_DIRECTIVES.Contains(directive) ||
-                (preserveProfileAuthentication && string.Equals(directive, "auth-user-pass", StringComparison.OrdinalIgnoreCase)))
+            if (!IsAppManagedDirective(directive) ||
+                (preserveProfileAuthentication &&
+                 string.Equals(directive, "auth-user-pass", StringComparison.OrdinalIgnoreCase)))
             {
                 lines.Add(raw);
             }
@@ -224,6 +279,11 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
 
         return string.Join("\n", lines);
     }
+
+    private static bool IsAppManagedDirective(string directive) =>
+        APP_MANAGED_DIRECTIVES.Contains(directive) ||
+        string.Equals(directive, "management", StringComparison.OrdinalIgnoreCase) ||
+        directive.StartsWith("management-", StringComparison.OrdinalIgnoreCase);
 
     private static bool HasClientAuthenticationMethod(string config, bool includeUsernamePassword)
     {
@@ -276,6 +336,19 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
 
     private static string Quote(string value) => $"\"{value.Replace("\\", "\\\\")}\"";
 
+    private static string CreateManagementPassword()
+    {
+        var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            return Convert.ToHexString(bytes);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
     private static string BuildUpScript(string tunnelInfoPath)
     {
         var builder = new StringBuilder();
@@ -306,9 +379,11 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
 
             info.SetAccessControl(security);
         }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or PlatformNotSupportedException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException or PlatformNotSupportedException or
+                                   System.Security.SecurityException or IOException)
         {
-            logger.LogWarning(ex, "Não foi possível restringir as permissões de {Directory}", directory);
+            throw new InvalidOperationException(
+                "Não foi possível proteger os arquivos temporários da sessão OpenVPN; a conexão foi cancelada.", ex);
         }
     }
 

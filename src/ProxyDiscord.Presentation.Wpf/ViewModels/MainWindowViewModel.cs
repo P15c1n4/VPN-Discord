@@ -456,7 +456,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         Password = value;
     }
 
-    public async Task LoadSavedCredentialsForCurrentServerAsync()
+    public async Task LoadSavedCredentialsForCurrentServerAsync(bool preserveCurrentCredentials = false)
     {
         var serverKey = CreateCredentialServerKey();
         if (serverKey is null)
@@ -466,10 +466,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         if (!string.Equals(_lastCredentialServerKey, serverKey, StringComparison.Ordinal))
         {
-            if (_lastCredentialServerKey is not null)
+            if (_lastCredentialServerKey is not null && !preserveCurrentCredentials)
             {
                 ResetCredentialTarget();
                 SetCredentialsWithoutMarkingManual("", "");
+            }
+            else if (preserveCurrentCredentials && _passwordWasManuallyEntered)
+            {
+                // A troca de protocolo mantém as credenciais informadas para o mesmo servidor.
+                // Atualize a chave para que uma conexão bem-sucedida possa salvá-las no protocolo atual.
+                _manualPasswordServerKey = serverKey;
             }
 
             _lastCredentialServerKey = serverKey;
@@ -684,7 +690,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 
         if (!_applyingVpnGateSelection)
         {
-            _ = LoadSavedCredentialsForCurrentServerAsync();
+            _ = LoadSavedCredentialsForCurrentServerAsync(preserveCurrentCredentials: _selectedServer is not null);
         }
     }
 

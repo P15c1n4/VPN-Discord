@@ -13,6 +13,7 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
     : IVpnEgressSelfTest
 {
     private static readonly TimeSpan PROBE_TIMEOUT = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan TOTAL_PROBE_TIMEOUT = TimeSpan.FromSeconds(60);
 
     private static readonly (string Host, int Port, string Path, bool UseTls)[] PUBLIC_IP_ENDPOINTS =
     [
@@ -32,9 +33,20 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         CancellationToken cancellationToken = default)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(PROBE_TIMEOUT * 3);
+        timeout.CancelAfter(TOTAL_PROBE_TIMEOUT);
 
-        var result = await ProbeAsync(adapter, directInterface, timeout.Token);
+        EgressSelfTestResult result;
+        try
+        {
+            result = await ProbeAsync(adapter, directInterface, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            result = new EgressSelfTestResult(
+                false,
+                $"O teste de saída excedeu o limite de {TOTAL_PROBE_TIMEOUT.TotalSeconds:0} segundos.");
+        }
+
         diagnostics.SelfTestCompleted(result);
 
         if (result.Success)
@@ -73,10 +85,22 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
         if (directInterface is not null)
         try
         {
+            // A direct-interface comparison is diagnostic only and must not hold the VPN test open
+            // while trying all fallback services.
+            using var directTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            directTimeout.CancelAfter(PROBE_TIMEOUT);
             directProbe = await GetPublicIpAsync(
                 socketFactory: () => VpnBoundSocketFactory.CreateTcpSocket(directInterface),
                 bindingDescription: $"direto if {directInterface.InterfaceIndex} ({directInterface.LocalIp})",
-                cancellationToken);
+                directTimeout.Token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            directProbe = new PublicIpProbeResult(null, "prazo da comparação direta excedido");
         }
         catch (Exception ex)
         {
@@ -117,17 +141,22 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
 
         foreach (var (host, port, path, useTls) in PUBLIC_IP_ENDPOINTS)
         {
+            using var endpointTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            endpointTimeout.CancelAfter(PROBE_TIMEOUT);
+            var probeToken = endpointTimeout.Token;
+
             try
             {
                 using var socket = socketFactory();
-                var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken);
+                var addresses = await Dns.GetHostAddressesAsync(host, probeToken);
                 var target = Array.Find(addresses, a => a.AddressFamily == AddressFamily.InterNetwork);
                 if (target is null)
                 {
+                    failures.Add($"{host}:{port}: nenhum endereço IPv4 disponível");
                     continue;
                 }
 
-                await socket.ConnectAsync(new IPEndPoint(target, port), cancellationToken);
+                await socket.ConnectAsync(new IPEndPoint(target, port), probeToken);
                 await using var networkStream = new NetworkStream(socket, ownsSocket: false);
                 using var tls = useTls
                     ? new SslStream(networkStream, leaveInnerStreamOpen: true)
@@ -137,14 +166,14 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
                 {
                     await tls.AuthenticateAsClientAsync(
                         new SslClientAuthenticationOptions { TargetHost = host },
-                        cancellationToken);
+                        probeToken);
                 }
 
                 var request = Encoding.ASCII.GetBytes(
                     $"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: curl/8\r\nConnection: close\r\n\r\n");
-                await stream.WriteAsync(request, cancellationToken);
+                await stream.WriteAsync(request, probeToken);
 
-                var response = await ReadAllAsync(stream, cancellationToken);
+                var response = await ReadAllAsync(stream, probeToken);
                 var body = ExtractBody(response);
                 if (IPAddress.TryParse(body, out var parsed))
                 {
@@ -153,6 +182,14 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
                 }
 
                 failures.Add($"{host}:{port}: resposta sem IP público");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                failures.Add($"{host}:{port}: tempo limite de {PROBE_TIMEOUT.TotalSeconds:0}s excedido");
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.NetworkUnreachable)
             {
@@ -185,6 +222,10 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
             return received.ReceivedBytes >= 12 &&
                    buffer[0] == query[0] && buffer[1] == query[1] &&
                    (buffer[2] & 0x80) != 0;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -221,14 +262,11 @@ public sealed class VpnEgressSelfTest(TunnelDiagnostics diagnostics, ILogger<Vpn
 
     private static async Task<string> ReadAllAsync(Stream stream, CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(PROBE_TIMEOUT);
-
         var buffer = new byte[4096];
         var builder = new StringBuilder();
         while (builder.Length < 16 * 1024)
         {
-            var read = await stream.ReadAsync(buffer, timeout.Token);
+            var read = await stream.ReadAsync(buffer, cancellationToken);
             if (read == 0)
             {
                 break;

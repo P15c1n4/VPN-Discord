@@ -17,10 +17,11 @@ internal sealed class OpenVpnConnection(
     TapAdapterProvisioner adapterProvisioner,
     OpenVpnProfileWriter profileWriter,
     IVpnInterfaceGatewayResolver gatewayResolver,
+    IOpenVpnInteractivePrompt interactivePrompt,
     ILogger<OpenVpnConnection> logger) : IVpnProvider
 {
     private static readonly TimeSpan MANAGEMENT_CONNECT_TIMEOUT = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan CONNECT_TIMEOUT = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan CONNECTION_ESTABLISH_TIMEOUT = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan SHUTDOWN_GRACE = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TUNNEL_INFO_TIMEOUT = TimeSpan.FromSeconds(10);
 
@@ -29,12 +30,14 @@ internal sealed class OpenVpnConnection(
     private Process? _process;
     private OpenVpnManagementClient? _management;
     private OpenVpnProfile? _profile;
+    private string? _adapterName;
     private VpnAdapterInfo? _adapterInfo;
     private CancellationTokenSource? _monitorCts;
     private Task? _monitorTask;
     private bool _connectionReady;
     private bool _stopping;
     private bool _lossRaised;
+    private bool _reconnecting;
 
     public event EventHandler<VpnConnectionLostEventArgs>? ConnectionLost;
 
@@ -76,6 +79,7 @@ internal sealed class OpenVpnConnection(
         {
             _stopping = false;
             _lossRaised = false;
+            _reconnecting = false;
         }
 
         try
@@ -94,6 +98,7 @@ internal sealed class OpenVpnConnection(
             lock (_lock)
             {
                 _profile = profile;
+                _adapterName = adapterName;
             }
 
             var console = new StringBuilder();
@@ -103,7 +108,8 @@ internal sealed class OpenVpnConnection(
                 _process = process;
             }
 
-            var management = new OpenVpnManagementClient(logger, request.Username, request.Password);
+            var management = new OpenVpnManagementClient(
+                logger, request.Username, request.Password, profile.ManagementPassword, interactivePrompt);
             lock (_lock)
             {
                 _management = management;
@@ -115,7 +121,9 @@ internal sealed class OpenVpnConnection(
                     DescribeStartupFailure(process, console), cancellationToken);
             }
 
-            var state = await management.WaitForConnectedAsync(CONNECT_TIMEOUT, cancellationToken);
+            // Deixe o OpenVPN repetir as tentativas usando os padrões dele. A espera permanece
+            // cancelável pelo aplicativo, mas não é encerrada por um prazo próprio de conexão.
+            var state = await management.WaitForConnectedAsync(CONNECTION_ESTABLISH_TIMEOUT, cancellationToken);
             if (state != OpenVpnState.Connected)
             {
                 return await FailAsync(DescribeFailure(state, console), cancellationToken);
@@ -168,9 +176,11 @@ internal sealed class OpenVpnConnection(
             _process = null;
             _management = null;
             _profile = null;
+            _adapterName = null;
             _adapterInfo = null;
             _connectionReady = false;
             _stopping = true;
+            _reconnecting = false;
             monitorCts = _monitorCts;
             monitorTask = _monitorTask;
             _monitorCts = null;
@@ -298,10 +308,11 @@ internal sealed class OpenVpnConnection(
 
     private void RecordConsoleLine(StringBuilder console, string? line)
     {
-        AppendConsole(console, line);
         if (!string.IsNullOrWhiteSpace(line))
         {
-            logger.LogDebug("OpenVPN: {Line}", RedactOpenVpnLogLine(line));
+            var safeLine = RedactOpenVpnLogLine(line);
+            AppendConsole(console, safeLine);
+            logger.LogDebug("OpenVPN: {Line}", safeLine);
         }
     }
 
@@ -310,20 +321,145 @@ internal sealed class OpenVpnConnection(
         var trimmed = line.Trim();
         return trimmed.Contains("PASSWORD:", StringComparison.OrdinalIgnoreCase) ||
                trimmed.Contains("Auth-Token", StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains("username", StringComparison.OrdinalIgnoreCase) &&
-               trimmed.Contains("password", StringComparison.OrdinalIgnoreCase)
+               trimmed.Contains("MANAGEMENT: CMD 'username", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains("MANAGEMENT: CMD 'password", StringComparison.OrdinalIgnoreCase) ||
+               (trimmed.Contains("username", StringComparison.OrdinalIgnoreCase) &&
+                trimmed.Contains("password", StringComparison.OrdinalIgnoreCase))
             ? "[evento de autenticação do OpenVPN omitido]"
             : trimmed;
     }
 
     private void OnManagementStateChanged(object? sender, OpenVpnStateChangedEventArgs args)
     {
-        if (args.State is OpenVpnState.Connected or OpenVpnState.Connecting)
+        bool wasReconnecting;
+        CancellationToken monitorToken;
+        lock (_lock)
+        {
+            if (_stopping || !_connectionReady || !ReferenceEquals(sender, _management))
+            {
+                return;
+            }
+
+            wasReconnecting = _reconnecting;
+            monitorToken = _monitorCts?.Token ?? CancellationToken.None;
+            if (args.State == OpenVpnState.Reconnecting)
+            {
+                _reconnecting = true;
+            }
+            else if (args.State == OpenVpnState.Connected)
+            {
+                _reconnecting = false;
+            }
+        }
+
+        if (args.State == OpenVpnState.Connected)
+        {
+            if (wasReconnecting && sender is OpenVpnManagementClient management)
+            {
+                _ = ConfirmReconnectAsync(management, monitorToken);
+            }
+
+            return;
+        }
+
+        if (args.State == OpenVpnState.Connecting)
         {
             return;
         }
 
-        NotifyConnectionLost($"O OpenVPN mudou para o estado {args.State}: {args.Message ?? "sem detalhe"}.");
+        if (args.State == OpenVpnState.Reconnecting)
+        {
+            logger.LogWarning(
+                "OpenVPN iniciou a reconexão. A sessão permanecerá ativa enquanto o OpenVPN tenta restabelecer o túnel: {Reason}",
+                args.Message ?? "sem detalhe");
+            return;
+        }
+
+        NotifyConnectionLost(
+            $"O OpenVPN mudou para o estado {args.State}: {args.Message ?? "sem detalhe"}.",
+            expectedManagement: sender as OpenVpnManagementClient);
+    }
+
+    private async Task ConfirmReconnectAsync(OpenVpnManagementClient management, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var nextStatusLog = DateTime.UtcNow;
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                OpenVpnProfile? profile;
+                string? adapterName;
+                lock (_lock)
+                {
+                    if (_stopping || !ReferenceEquals(_management, management))
+                    {
+                        return;
+                    }
+
+                    profile = _profile;
+                    adapterName = _adapterName;
+                }
+
+                if (management.State != OpenVpnState.Connected)
+                {
+                    return;
+                }
+
+                if (profile is not null && !string.IsNullOrWhiteSpace(adapterName))
+                {
+                    var current = await ResolveAdapterInfoAsync(profile, adapterName, cancellationToken);
+                    if (current is not null && HasOriginalTunnelAddress(current))
+                    {
+                        lock (_lock)
+                        {
+                            if (_stopping || !ReferenceEquals(_management, management))
+                            {
+                                return;
+                            }
+
+                            _adapterInfo = current;
+                        }
+
+                        logger.LogInformation(
+                            "OpenVPN reconectado; interface {IfIdx}, IP {Ip}, gateway {Gateway} confirmados.",
+                            current.InterfaceIndex, current.LocalIp, current.GatewayIp ?? "(on-link)");
+                        return;
+                    }
+                }
+
+                if (DateTime.UtcNow >= nextStatusLog)
+                {
+                    logger.LogWarning(
+                        "OpenVPN informou reconexão, aguardando o endereço atual da interface do túnel; " +
+                        "a sessão não será encerrada por um prazo fixo.");
+                    nextStatusLog = DateTime.UtcNow.AddSeconds(15);
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private static bool HasOriginalTunnelAddress(VpnAdapterInfo adapter)
+    {
+        try
+        {
+            return NetworkInterface.GetAllNetworkInterfaces().Any(network =>
+            {
+                var properties = network.GetIPProperties();
+                return properties.GetIPv4Properties()?.Index == adapter.InterfaceIndex &&
+                       properties.UnicastAddresses.Any(address =>
+                           address.Address.AddressFamily == AddressFamily.InterNetwork &&
+                           string.Equals(address.Address.ToString(), adapter.LocalIp, StringComparison.Ordinal));
+            });
+        }
+        catch (NetworkInformationException)
+        {
+            return false;
+        }
     }
 
     private void OnProcessExited(Process process)
@@ -338,14 +474,20 @@ internal sealed class OpenVpnConnection(
         }
 
         NotifyConnectionLost(
-            $"O processo OpenVPN encerrou inesperadamente{(exitCode is null ? string.Empty : $" (código {exitCode})") }.");
+            $"O processo OpenVPN encerrou inesperadamente{(exitCode is null ? string.Empty : $" (código {exitCode})") }.",
+            expectedProcess: process);
     }
 
-    private void NotifyConnectionLost(string reason)
+    private void NotifyConnectionLost(
+        string reason,
+        OpenVpnManagementClient? expectedManagement = null,
+        Process? expectedProcess = null)
     {
         lock (_lock)
         {
-            if (_stopping || !_connectionReady || _lossRaised)
+            if (_stopping || !_connectionReady || _lossRaised ||
+                expectedManagement is not null && !ReferenceEquals(expectedManagement, _management) ||
+                expectedProcess is not null && !ReferenceEquals(expectedProcess, _process))
             {
                 return;
             }

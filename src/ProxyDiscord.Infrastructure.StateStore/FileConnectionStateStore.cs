@@ -48,8 +48,7 @@ public sealed class FileConnectionStateStore : IConnectionStateStore
 
     public async Task WriteActiveStateAsync(ConnectionStateRecord record, CancellationToken cancellationToken = default)
     {
-        var json = JsonSerializer.Serialize(record, JSON_OPTIONS);
-        await File.WriteAllTextAsync(_stateFilePath, json, cancellationToken);
+        await JsonFile.WriteAtomicallyAsync(_stateFilePath, record, JSON_OPTIONS, cancellationToken);
     }
 
     public Task ClearStateAsync(CancellationToken cancellationToken = default)
@@ -61,7 +60,7 @@ public sealed class FileConnectionStateStore : IConnectionStateStore
                 File.Delete(_stateFilePath);
             }
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogWarning(ex, "Não foi possível remover o arquivo de estado {Path}", _stateFilePath);
         }

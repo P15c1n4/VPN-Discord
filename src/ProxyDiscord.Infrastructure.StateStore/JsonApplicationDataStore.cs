@@ -6,7 +6,7 @@ using ProxyDiscord.Application.Ports;
 
 namespace ProxyDiscord.Infrastructure.StateStore;
 
-/// <summary>Owns the portable application's single configuration/credential document.</summary>
+/// <summary>Coordinates the portable configuration and per-server credential files.</summary>
 public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerCredentialsStore
 {
     private static readonly JsonSerializerOptions JSON_OPTIONS =
@@ -15,11 +15,12 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
     private readonly ILogger<JsonApplicationDataStore> _logger;
     private readonly string _directory;
     private readonly string _configPath;
-    private readonly string _legacyCredentialsPath;
+    private readonly string _credentialsPath;
     private readonly Func<string, string> _protectPassword;
     private readonly Func<string, string> _unprotectPassword;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private DataDocument? _document;
+    private ConfigurationDocument? _configuration;
+    private CredentialDocument? _credentialDocument;
     private Dictionary<string, ServerCredentials> _credentials = new(StringComparer.OrdinalIgnoreCase);
 
     public JsonApplicationDataStore(ILogger<JsonApplicationDataStore> logger, string? directory = null)
@@ -36,7 +37,7 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
         _logger = logger;
         _directory = directory ?? AppContext.BaseDirectory;
         _configPath = Path.Combine(_directory, "config.json");
-        _legacyCredentialsPath = Path.Combine(_directory, "user_auth.json");
+        _credentialsPath = Path.Combine(_directory, "user_auth.json");
         _protectPassword = protectPassword;
         _unprotectPassword = unprotectPassword;
     }
@@ -60,8 +61,8 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
         try
         {
             await EnsureLoadedLockedAsync(cancellationToken);
-            var document = _document!;
-            return new UserConfiguration(document.SaveCredentialsEnabled, document.SavePasswordAfterConnectionEnabled);
+            var configuration = _configuration!;
+            return new UserConfiguration(configuration.SaveCredentialsEnabled, configuration.SavePasswordAfterConnectionEnabled);
         }
         finally
         {
@@ -75,11 +76,13 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
         try
         {
             await EnsureLoadedLockedAsync(cancellationToken);
-            var updated = Clone(_document!);
-            updated.SaveCredentialsEnabled = configuration.SaveCredentialsEnabled;
-            updated.SavePasswordAfterConnectionEnabled = configuration.SavePasswordAfterConnectionEnabled;
+            var updated = new ConfigurationDocument
+            {
+                SaveCredentialsEnabled = configuration.SaveCredentialsEnabled,
+                SavePasswordAfterConnectionEnabled = configuration.SavePasswordAfterConnectionEnabled,
+            };
             await JsonFile.WriteAtomicallyAsync(_configPath, updated, JSON_OPTIONS, cancellationToken);
-            _document = updated;
+            _configuration = updated;
         }
         finally
         {
@@ -111,7 +114,7 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
         try
         {
             await EnsureLoadedLockedAsync(cancellationToken);
-            var updated = Clone(_document!);
+            var updated = Clone(_credentialDocument!);
             updated.Servers.TryGetValue(serverKey, out var existing);
 
             string? protectedPassword;
@@ -129,8 +132,8 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
             }
 
             updated.Servers[serverKey] = new CredentialEntry(username, protectedPassword);
-            await JsonFile.WriteAtomicallyAsync(_configPath, updated, JSON_OPTIONS, cancellationToken);
-            _document = updated;
+            await JsonFile.WriteAtomicallyAsync(_credentialsPath, updated, JSON_OPTIONS, cancellationToken);
+            _credentialDocument = updated;
             _credentials[serverKey] = new ServerCredentials(username, TryDecrypt(protectedPassword, serverKey));
         }
         finally
@@ -141,75 +144,149 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
 
     private async Task EnsureLoadedLockedAsync(CancellationToken cancellationToken)
     {
-        if (_document is not null)
+        if (_configuration is not null)
         {
             return;
         }
 
         Directory.CreateDirectory(_directory);
-        var document = await ReadConfigAsync(cancellationToken);
-        var migrated = false;
-        if (File.Exists(_legacyCredentialsPath))
+        var (configuration, embeddedCredentials) = await ReadConfigurationAsync(cancellationToken);
+        var credentials = await ReadCredentialDocumentAsync(cancellationToken);
+
+        if (embeddedCredentials is not null)
         {
-            try
+            foreach (var (key, entry) in embeddedCredentials.Servers)
             {
-                var legacyJson = await File.ReadAllTextAsync(_legacyCredentialsPath, cancellationToken);
-                var legacy = JsonSerializer.Deserialize<CredentialDocument>(legacyJson, JSON_OPTIONS);
-                if (legacy is not null)
+                if (credentials.Servers.TryGetValue(key, out var existing) &&
+                    (!string.Equals(existing.Username, entry.Username, StringComparison.Ordinal) ||
+                     !string.Equals(existing.ProtectedPassword, entry.ProtectedPassword, StringComparison.Ordinal)))
                 {
-                    foreach (var (key, value) in legacy.Servers)
-                    {
-                        if (!document.Servers.ContainsKey(key))
-                        {
-                            document.Servers[key] = value;
-                            migrated = true;
-                        }
-                    }
+                    throw new InvalidDataException(
+                        $"Há credenciais diferentes para '{key}' em config.json e user_auth.json. " +
+                        "Os arquivos foram preservados para evitar perda de dados.");
                 }
 
-                if (migrated || !File.Exists(_configPath))
-                {
-                    await JsonFile.WriteAtomicallyAsync(_configPath, document, JSON_OPTIONS, cancellationToken);
-                }
+                credentials.Servers[key] = entry;
+            }
 
-                File.Delete(_legacyCredentialsPath);
-                _logger.LogInformation("Credenciais legadas migradas para config.json.");
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-            {
-                _logger.LogError(ex, "Não foi possível migrar as credenciais legadas; o arquivo original foi mantido.");
-                if (migrated)
-                {
-                    throw;
-                }
-            }
+            // If the second write fails, config.json still contains the source credentials.
+            // Repeating this merge on the next startup is safe because identical entries are accepted.
+            await JsonFile.WriteAtomicallyAsync(_credentialsPath, credentials, JSON_OPTIONS, cancellationToken);
+            await JsonFile.WriteAtomicallyAsync(_configPath, configuration, JSON_OPTIONS, cancellationToken);
+            _logger.LogInformation("Credenciais transferidas de config.json para user_auth.json.");
         }
 
-        _document = document;
+        _configuration = configuration;
+        _credentialDocument = credentials;
         _credentials = new Dictionary<string, ServerCredentials>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (key, entry) in document.Servers)
+        foreach (var (key, entry) in credentials.Servers)
         {
             _credentials[key] = new ServerCredentials(entry.Username, TryDecrypt(entry.ProtectedPassword, key));
         }
     }
 
-    private async Task<DataDocument> ReadConfigAsync(CancellationToken cancellationToken)
+    private async Task<(ConfigurationDocument Configuration, CredentialDocument? EmbeddedCredentials)>
+        ReadConfigurationAsync(CancellationToken cancellationToken)
     {
         if (!File.Exists(_configPath))
         {
-            return new DataDocument();
+            return (new ConfigurationDocument(), null);
         }
 
         try
         {
             var json = await File.ReadAllTextAsync(_configPath, cancellationToken);
-            return JsonSerializer.Deserialize<DataDocument>(json, JSON_OPTIONS) ?? new DataDocument();
+            using var root = JsonDocument.Parse(json);
+            if (root.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new JsonException("A configuração precisa ser um objeto JSON.");
+            }
+
+            var configuration = JsonSerializer.Deserialize<ConfigurationDocument>(json, JSON_OPTIONS)
+                                ?? throw new JsonException("O documento de configuração está vazio.");
+            var hasEmbeddedCredentials = false;
+            JsonElement servers = default;
+            foreach (var property in root.RootElement.EnumerateObject())
+            {
+                if (!property.Name.Equals("servers", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                hasEmbeddedCredentials = true;
+                servers = property.Value;
+            }
+
+            if (!hasEmbeddedCredentials)
+            {
+                return (configuration, null);
+            }
+
+            if (servers.ValueKind != JsonValueKind.Object)
+            {
+                throw new JsonException("A lista de servidores em config.json não é válida.");
+            }
+
+            var embedded = JsonSerializer.Deserialize<CredentialDocument>(json, JSON_OPTIONS)
+                           ?? throw new JsonException("As credenciais em config.json não são válidas.");
+            NormalizeCredentials(embedded, "config.json");
+            return (configuration, embedded);
         }
         catch (JsonException ex)
         {
-            _logger.LogError(ex, "config.json está inválido; os dados não serão sobrescritos automaticamente.");
+            _logger.LogError(ex, "config.json está inválido; o arquivo foi mantido.");
             throw new InvalidDataException("O arquivo config.json está inválido. Preserve-o e corrija-o antes de continuar.", ex);
         }
+    }
+
+    private async Task<CredentialDocument> ReadCredentialDocumentAsync(CancellationToken cancellationToken)
+    {
+        if (!File.Exists(_credentialsPath))
+        {
+            return new CredentialDocument();
+        }
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(_credentialsPath, cancellationToken);
+            using var root = JsonDocument.Parse(json);
+            if (root.RootElement.ValueKind != JsonValueKind.Object ||
+                !root.RootElement.EnumerateObject().Any(property =>
+                    property.Name.Equals("servers", StringComparison.OrdinalIgnoreCase) &&
+                    property.Value.ValueKind == JsonValueKind.Object))
+            {
+                throw new JsonException("user_auth.json não contém uma lista válida de servidores.");
+            }
+
+            var document = JsonSerializer.Deserialize<CredentialDocument>(json, JSON_OPTIONS)
+                           ?? throw new JsonException("O documento de credenciais está vazio.");
+            NormalizeCredentials(document, "user_auth.json");
+            return document;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, "user_auth.json está inválido; o arquivo foi mantido.");
+            throw new InvalidDataException("O arquivo user_auth.json está inválido. Preserve-o e corrija-o antes de continuar.", ex);
+        }
+    }
+
+    private static void NormalizeCredentials(CredentialDocument document, string fileName)
+    {
+        if (document.Servers is null)
+        {
+            throw new JsonException($"A lista de servidores em {fileName} não é válida.");
+        }
+
+        var servers = new Dictionary<string, CredentialEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, entry) in document.Servers)
+        {
+            if (entry is null || entry.Username is null || !servers.TryAdd(key, entry))
+            {
+                throw new JsonException($"A credencial do servidor '{key}' em {fileName} é inválida ou duplicada.");
+            }
+        }
+
+        document.Servers = servers;
     }
 
     private string? TryDecrypt(string? protectedPassword, string serverKey)
@@ -230,19 +307,16 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
         }
     }
 
-    private static DataDocument Clone(DataDocument source) => new()
+    private static CredentialDocument Clone(CredentialDocument source) => new()
     {
-        SaveCredentialsEnabled = source.SaveCredentialsEnabled,
-        SavePasswordAfterConnectionEnabled = source.SavePasswordAfterConnectionEnabled,
         Servers = new Dictionary<string, CredentialEntry>(source.Servers, StringComparer.OrdinalIgnoreCase),
     };
 
-    private sealed class DataDocument
+    private sealed class ConfigurationDocument
     {
-        public DataDocument() { }
+        public ConfigurationDocument() { }
         public bool SaveCredentialsEnabled { get; set; }
         public bool SavePasswordAfterConnectionEnabled { get; set; }
-        public Dictionary<string, CredentialEntry> Servers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private sealed class CredentialDocument

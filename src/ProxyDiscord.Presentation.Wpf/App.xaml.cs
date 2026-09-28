@@ -170,6 +170,30 @@ public partial class App : System.Windows.Application
         _singleInstance?.Dispose();
         _singleInstance = null;
 
+        var services = _services;
+        _services = null;
+
+        try
+        {
+            if (services is IAsyncDisposable asyncDisposable)
+            {
+                // O contêiner tem dependências assíncronas, como o motor de roteamento.
+                // Aguarde fora do dispatcher para não bloquear operações de descarte que
+                // precisem da própria thread da interface.
+                System.Threading.Tasks.Task.Run(async () => await asyncDisposable.DisposeAsync())
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            else if (services is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Falha ao liberar os serviços do aplicativo durante a saída");
+        }
+
         base.OnExit(e);
     }
 

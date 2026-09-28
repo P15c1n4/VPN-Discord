@@ -30,22 +30,25 @@ internal static class CompositionRoot
         var services = new ServiceCollection();
         var sessionContext = new RoutingSessionContext();
 
+        services.AddSingleton(_ => new FileLoggerProvider(() => new Dictionary<string, object?>
+        {
+            ["status"] = sessionContext.Status.ToString(),
+            ["targetProcessName"] = sessionContext.TargetProcess?.Name,
+            ["targetProcessPid"] = sessionContext.TargetProcess?.Pid,
+            ["latencyMilliseconds"] = sessionContext.Latency?.TotalMilliseconds,
+            ["lastError"] = sessionContext.LastError,
+        }));
+
         services.AddLogging(builder =>
         {
             builder.SetMinimumLevel(LogLevel.Debug);
             builder.AddFilter("System.Net.Http", LogLevel.Warning);
             builder.AddFilter("Microsoft", LogLevel.Warning);
-            builder.AddProvider(new FileLoggerProvider(() => new Dictionary<string, object?>
-            {
-                ["status"] = sessionContext.Status.ToString(),
-                ["targetProcessName"] = sessionContext.TargetProcess?.Name,
-                ["targetProcessPid"] = sessionContext.TargetProcess?.Pid,
-                ["latencyMilliseconds"] = sessionContext.Latency?.TotalMilliseconds,
-                ["lastError"] = sessionContext.LastError,
-            }));
+            builder.Services.AddSingleton<ILoggerProvider>(sp => sp.GetRequiredService<FileLoggerProvider>());
         });
 
         services.AddSingleton(dispatcher);
+        services.AddSingleton<IOpenVpnInteractivePrompt, WpfOpenVpnInteractivePrompt>();
         services.AddSingleton(sessionContext);
 
         services.AddProcessManagement();
@@ -91,6 +94,7 @@ internal static class CompositionRoot
         services.AddSingleton<Action>(sp => () => ShowDiagnostics(sp));
 
         var provider = services.BuildServiceProvider();
+        _ = provider.GetRequiredService<FileLoggerProvider>();
         _ = provider.GetRequiredService<VpnConnectionSupervisor>();
         return provider;
     }

@@ -15,6 +15,10 @@ internal sealed class TapAdapterProvisioner(OpenVpnBinaries binaries, ILogger<Ta
     private const string HARDWARE_ID = "tap0901";
 
     private static readonly TimeSpan TOOL_TIMEOUT = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan ADAPTER_DISCOVERY_TIMEOUT = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ADAPTER_DISCOVERY_INTERVAL = TimeSpan.FromMilliseconds(250);
+    private const int PNPUTIL_NO_MATCHING_DEVICE = 259;
+    private const int PNPUTIL_REBOOT_REQUIRED = 3010;
 
     public async Task<string> EnsureAdapterAsync(CancellationToken cancellationToken = default)
     {
@@ -27,14 +31,16 @@ internal sealed class TapAdapterProvisioner(OpenVpnBinaries binaries, ILogger<Ta
         await InstallDriverAsync(cancellationToken);
         await CreateAdapterAsync(cancellationToken);
 
-        if (FindExistingAdapter() is null)
+        var createdAdapter = await WaitForAdapterAsync(cancellationToken);
+        if (createdAdapter is null)
         {
             throw new InvalidOperationException(
-                $"O adaptador TAP '{ADAPTER_NAME}' foi criado, mas ainda não aparece na lista de interfaces de rede.");
+                $"O tapctl concluiu a criação do adaptador TAP '{ADAPTER_NAME}', mas o Windows não o listou " +
+                $"em até {ADAPTER_DISCOVERY_TIMEOUT.TotalSeconds:0} segundos.");
         }
 
-        logger.LogInformation("Adaptador TAP '{Name}' criado.", ADAPTER_NAME);
-        return ADAPTER_NAME;
+        logger.LogInformation("Adaptador TAP '{Name}' criado e reconhecido pelo Windows.", createdAdapter);
+        return createdAdapter;
     }
 
     internal static string? FindExistingAdapter()
@@ -54,14 +60,38 @@ internal sealed class TapAdapterProvisioner(OpenVpnBinaries binaries, ILogger<Ta
             TOOL_TIMEOUT,
             cancellationToken);
 
-        if (!result.Success && result.ExitCode != 259)
+        if (!result.Success && result.ExitCode is not PNPUTIL_NO_MATCHING_DEVICE and not PNPUTIL_REBOOT_REQUIRED)
         {
             throw new InvalidOperationException(
                 $"Não foi possível instalar o driver TAP (pnputil, código {result.ExitCode}). " +
                 $"Detalhes: {result.Output.Trim()}");
         }
 
+        if (result.ExitCode == PNPUTIL_REBOOT_REQUIRED)
+        {
+            logger.LogWarning(
+                "O pnputil instalou o driver TAP, mas o Windows indicou que uma reinicialização será necessária " +
+                "para concluir a instalação. Tentando criar o adaptador nesta sessão.");
+        }
+
         logger.LogDebug("pnputil: {Output}", result.Output.Trim());
+    }
+
+    private static async Task<string?> WaitForAdapterAsync(CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + ADAPTER_DISCOVERY_TIMEOUT;
+        while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        {
+            if (FindExistingAdapter() is { } adapter)
+            {
+                return adapter;
+            }
+
+            await Task.Delay(ADAPTER_DISCOVERY_INTERVAL, cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return FindExistingAdapter();
     }
 
     private async Task CreateAdapterAsync(CancellationToken cancellationToken)
