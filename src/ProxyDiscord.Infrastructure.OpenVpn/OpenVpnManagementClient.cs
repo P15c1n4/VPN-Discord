@@ -30,7 +30,7 @@ internal sealed class OpenVpnManagementClient(
     IOpenVpnInteractivePrompt? interactivePrompt = null) : IDisposable
 {
     private static readonly TimeSpan CONNECT_RETRY_DELAY = TimeSpan.FromMilliseconds(200);
-    private static readonly TimeSpan COMMAND_ACK_TIMEOUT = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MANAGEMENT_RESPONSE_TIMEOUT = TimeSpan.FromSeconds(60);
 
     private TcpClient? _client;
     private StreamReader? _reader;
@@ -44,10 +44,13 @@ internal sealed class OpenVpnManagementClient(
 
     public string? LastStateMessage { get => _lastStateMessage; private set => _lastStateMessage = value; }
 
+    public string? StartupFailureReason { get; private set; }
+
     public event EventHandler<OpenVpnStateChangedEventArgs>? StateChanged;
 
     public async Task<bool> ConnectAsync(int port, TimeSpan timeout, CancellationToken cancellationToken)
     {
+        StartupFailureReason = null;
         var deadline = DateTime.UtcNow + timeout;
 
         while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
@@ -73,7 +76,11 @@ internal sealed class OpenVpnManagementClient(
             var stream = client.GetStream();
             var protocolEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             _reader = new StreamReader(stream, protocolEncoding);
-            _writer = new StreamWriter(stream, protocolEncoding) { AutoFlush = true };
+            _writer = new StreamWriter(stream, protocolEncoding)
+            {
+                AutoFlush = true,
+                NewLine = "\n",
+            };
 
             if (!string.IsNullOrEmpty(managementPassword) &&
                 !await AuthenticateManagementAsync(managementPassword, cancellationToken))
@@ -85,6 +92,7 @@ internal sealed class OpenVpnManagementClient(
                    await SendCommandAsync("hold release", cancellationToken);
         }
 
+        StartupFailureReason = $"OpenVPN não abriu a interface de gerenciamento em até {timeout.TotalSeconds:0} segundos.";
         return false;
     }
 
@@ -94,12 +102,13 @@ internal sealed class OpenVpnManagementClient(
     {
         if (managementSecret.Contains('\r') || managementSecret.Contains('\n'))
         {
+            StartupFailureReason = "A senha temporária da interface OpenVPN contém caracteres inválidos.";
             logger.LogError("A senha temporária da interface OpenVPN contém caracteres inválidos.");
             return false;
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(COMMAND_ACK_TIMEOUT);
+        timeoutCts.CancelAfter(MANAGEMENT_RESPONSE_TIMEOUT);
 
         try
         {
@@ -110,40 +119,84 @@ internal sealed class OpenVpnManagementClient(
                 return false;
             }
 
-            // O protocolo normalmente envia ENTER PASSWORD antes de ler a senha. Enviá-la
-            // imediatamente evita depender desse prompt, que pode não chegar em algumas
-            // combinações do OpenVPN no Windows. A senha só é aceita se o servidor confirmar.
-            await SendAsync(managementSecret);
-            while (await reader.ReadLineAsync(timeoutCts.Token) is { } response)
+            // OpenVPN escreve "ENTER PASSWORD:" sem terminador de linha. Aguarde o
+            // marcador diretamente; ReadLineAsync ficaria bloqueado até outra mensagem.
+            if (await ReadUntilManagementMarkerAsync(reader, "ENTER PASSWORD:", timeoutCts.Token) is null)
             {
-                if (string.Equals(response, "SUCCESS: password is correct", StringComparison.Ordinal))
-                {
-                    return true;
-                }
-
-                if (response.StartsWith("ERROR:", StringComparison.Ordinal))
-                {
-                    logger.LogWarning("A autenticação da interface de gerenciamento do OpenVPN foi recusada.");
-                    return false;
-                }
-
-                // ENTER PASSWORD e notificações informativas podem ser enviados antes da
-                // confirmação. Não contêm credenciais e não substituem a validação SUCCESS.
+                StartupFailureReason = "A interface de gerenciamento encerrou a conexão antes de solicitar a senha local.";
+                return false;
             }
 
+            await SendAsync(managementSecret);
+            var marker = await ReadUntilManagementMarkerAsync(
+                reader,
+                "SUCCESS: password is correct",
+                timeoutCts.Token,
+                "ENTER PASSWORD:",
+                "ERROR:");
+            if (string.Equals(marker, "SUCCESS: password is correct", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (marker is not null)
+            {
+                StartupFailureReason = "A interface de gerenciamento recusou a senha temporária local do OpenVPN.";
+                logger.LogWarning("A autenticação da interface de gerenciamento do OpenVPN foi recusada.");
+                return false;
+            }
+
+            StartupFailureReason = "A conexão com a interface de gerenciamento foi encerrada antes da autenticação local ser confirmada.";
             logger.LogWarning("A conexão com a interface de gerenciamento do OpenVPN foi encerrada antes da confirmação.");
             return false;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            StartupFailureReason = "A interface de gerenciamento não confirmou a autenticação local em até 60 segundos.";
             logger.LogWarning("A interface de gerenciamento do OpenVPN não concluiu a autenticação no prazo.");
             return false;
         }
         catch (IOException ex)
         {
+            StartupFailureReason = "Houve uma falha de comunicação durante a autenticação local do OpenVPN.";
             logger.LogWarning(ex, "Falha ao autenticar na interface de gerenciamento do OpenVPN.");
             return false;
         }
+    }
+
+    private static async Task<string?> ReadUntilManagementMarkerAsync(
+        StreamReader reader,
+        string firstMarker,
+        CancellationToken cancellationToken,
+        params string[] additionalMarkers)
+    {
+        var markers = new string[additionalMarkers.Length + 1];
+        markers[0] = firstMarker;
+        Array.Copy(additionalMarkers, 0, markers, 1, additionalMarkers.Length);
+        var maxMarkerLength = markers.Max(marker => marker.Length);
+        var tail = new StringBuilder(maxMarkerLength);
+        var character = new char[1];
+
+        while (await reader.ReadAsync(character.AsMemory(), cancellationToken) is 1)
+        {
+            tail.Append(character[0]);
+            if (tail.Length > maxMarkerLength)
+            {
+                tail.Remove(0, tail.Length - maxMarkerLength);
+            }
+
+            foreach (var marker in markers)
+            {
+                if (tail.Length >= marker.Length &&
+                    tail.ToString(tail.Length - marker.Length, marker.Length)
+                        .Equals(marker, StringComparison.Ordinal))
+                {
+                    return marker;
+                }
+            }
+        }
+
+        return null;
     }
 
     public async Task<OpenVpnState> WaitForConnectedAsync(TimeSpan timeout, CancellationToken cancellationToken)
@@ -428,7 +481,7 @@ internal sealed class OpenVpnManagementClient(
             await _writeGate.WaitAsync();
             try
             {
-                await writer.WriteLineAsync(command);
+                await writer.WriteAsync(command + "\n");
             }
             finally
             {
@@ -447,7 +500,7 @@ internal sealed class OpenVpnManagementClient(
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(COMMAND_ACK_TIMEOUT);
+        timeoutCts.CancelAfter(MANAGEMENT_RESPONSE_TIMEOUT);
 
         try
         {
@@ -462,6 +515,7 @@ internal sealed class OpenVpnManagementClient(
 
                 if (line.StartsWith("ERROR:", StringComparison.Ordinal))
                 {
+                    StartupFailureReason = $"A interface de gerenciamento recusou o comando '{command}'.";
                     logger.LogWarning("O OpenVPN recusou o comando '{Command}' da interface de gerenciamento.", command);
                     return false;
                 }
@@ -469,12 +523,15 @@ internal sealed class OpenVpnManagementClient(
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            StartupFailureReason = $"A interface de gerenciamento não confirmou o comando '{command}' em até 60 segundos.";
             logger.LogWarning("O OpenVPN não confirmou o comando '{Command}' da interface de gerenciamento.", command);
         }
         catch (IOException)
         {
+            StartupFailureReason = $"A comunicação com a interface de gerenciamento foi interrompida durante o comando '{command}'.";
         }
 
+        StartupFailureReason ??= $"A interface de gerenciamento encerrou a conexão durante o comando '{command}'.";
         return false;
     }
 

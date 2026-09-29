@@ -20,8 +20,11 @@ internal sealed class OpenVpnConnection(
     IOpenVpnInteractivePrompt interactivePrompt,
     ILogger<OpenVpnConnection> logger) : IVpnProvider
 {
-    private static readonly TimeSpan MANAGEMENT_CONNECT_TIMEOUT = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan CONNECTION_ESTABLISH_TIMEOUT = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan MANAGEMENT_CONNECT_TIMEOUT = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan CONNECTION_ESTABLISH_TIMEOUT = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan CONNECTION_STARTUP_TIMEOUT = TimeSpan.FromSeconds(180);
+    private const string CONNECTION_STARTUP_TIMEOUT_MESSAGE =
+        "A tentativa inicial de conexão OpenVPN excedeu o limite total de 180 segundos e foi encerrada.";
     private static readonly TimeSpan SHUTDOWN_GRACE = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan TUNNEL_INFO_TIMEOUT = TimeSpan.FromSeconds(10);
 
@@ -82,9 +85,13 @@ internal sealed class OpenVpnConnection(
             _reconnecting = false;
         }
 
+        using var startupTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        startupTimeout.CancelAfter(CONNECTION_STARTUP_TIMEOUT);
+        var startupToken = startupTimeout.Token;
+
         try
         {
-            var adapterName = await adapterProvisioner.EnsureAdapterAsync(cancellationToken);
+            var adapterName = await adapterProvisioner.EnsureAdapterAsync(startupToken);
             var managementPort = ReserveLoopbackPort();
 
             var profile = profileWriter.Write(
@@ -115,26 +122,35 @@ internal sealed class OpenVpnConnection(
                 _management = management;
             }
 
-            if (!await management.ConnectAsync(managementPort, MANAGEMENT_CONNECT_TIMEOUT, cancellationToken))
+            if (!await management.ConnectAsync(managementPort, MANAGEMENT_CONNECT_TIMEOUT, startupToken))
             {
+                if (startupTimeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    return await FailAsync(CONNECTION_STARTUP_TIMEOUT_MESSAGE, CancellationToken.None);
+                }
+
                 return await FailAsync(
-                    DescribeStartupFailure(process, console), cancellationToken);
+                    DescribeStartupFailure(process, console, management.StartupFailureReason), startupToken);
             }
 
-            // Deixe o OpenVPN repetir as tentativas usando os padrões dele. A espera permanece
-            // cancelável pelo aplicativo, mas não é encerrada por um prazo próprio de conexão.
-            var state = await management.WaitForConnectedAsync(CONNECTION_ESTABLISH_TIMEOUT, cancellationToken);
+            // Give foreign servers time to respond while keeping the entire initial attempt bounded.
+            var state = await management.WaitForConnectedAsync(CONNECTION_ESTABLISH_TIMEOUT, startupToken);
             if (state != OpenVpnState.Connected)
             {
-                return await FailAsync(DescribeFailure(state, console), cancellationToken);
+                if (startupTimeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    return await FailAsync(CONNECTION_STARTUP_TIMEOUT_MESSAGE, CancellationToken.None);
+                }
+
+                return await FailAsync(DescribeFailure(state, console), startupToken);
             }
 
-            var adapterInfo = await ResolveAdapterInfoAsync(profile, adapterName, cancellationToken);
+            var adapterInfo = await ResolveAdapterInfoAsync(profile, adapterName, startupToken);
             if (adapterInfo is null)
             {
                 return await FailAsync(
                     "O OpenVPN conectou, mas não foi possível obter o endereço IP do túnel.",
-                    cancellationToken);
+                    startupToken);
             }
 
             lock (_lock)
@@ -151,6 +167,13 @@ internal sealed class OpenVpnConnection(
                 adapterInfo.InterfaceIndex, adapterInfo.LocalIp, adapterInfo.GatewayIp ?? "(on-link)");
 
             return VpnConnectionResult.Ok(VpnLinkStatus.Connected);
+        }
+        catch (OperationCanceledException) when (
+            startupTimeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning("{Message}", CONNECTION_STARTUP_TIMEOUT_MESSAGE);
+            await DisconnectAsync(CancellationToken.None);
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, CONNECTION_STARTUP_TIMEOUT_MESSAGE);
         }
         catch (Exception ex)
         {
@@ -518,14 +541,14 @@ internal sealed class OpenVpnConnection(
         }
     }
 
-    private string DescribeStartupFailure(Process process, StringBuilder console)
+    private string DescribeStartupFailure(Process process, StringBuilder console, string? managementFailureReason)
     {
         var exited = process.HasExited;
         var detail = GetConsoleTail(console);
 
         var message = exited
             ? $"O OpenVPN encerrou com o código {process.ExitCode} antes de iniciar a interface de gerenciamento."
-            : "A interface de gerenciamento do OpenVPN não respondeu.";
+            : managementFailureReason ?? "A interface de gerenciamento do OpenVPN não respondeu.";
 
         return string.IsNullOrWhiteSpace(detail) ? message : $"{message} Detalhes: {detail}";
     }

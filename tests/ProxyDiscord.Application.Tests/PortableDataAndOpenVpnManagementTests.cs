@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,6 +14,78 @@ namespace ProxyDiscord.Application.Tests;
 
 public sealed class PortableDataAndOpenVpnManagementTests
 {
+    [Fact]
+    public async Task ManagementClientAuthenticatesAgainstBundledOpenVpnExecutable()
+    {
+        var openVpnExe = FindBundledOpenVpn();
+        Assert.True(File.Exists(openVpnExe), $"OpenVPN de teste não encontrado: {openVpnExe}");
+
+        await WithTemporaryDirectoryAsync(async directory =>
+        {
+            const string managementPassword = "integration-secret-0123456789";
+            var passwordPath = Path.Combine(directory, "management.pw");
+            var configPath = Path.Combine(directory, "management-test.ovpn");
+            var port = ReservePort();
+            await File.WriteAllTextAsync(passwordPath, managementPassword, Encoding.ASCII);
+            await File.WriteAllTextAsync(
+                configPath,
+                $"dev null\nmanagement 127.0.0.1 {port} {passwordPath.Replace('\\', '/')}\n" +
+                "management-hold\nverb 3\n",
+                new UTF8Encoding(false));
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = openVpnExe,
+                WorkingDirectory = directory,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            startInfo.ArgumentList.Add("--config");
+            startInfo.ArgumentList.Add(configPath);
+
+            using var process = Process.Start(startInfo)
+                                ?? throw new InvalidOperationException("Não foi possível iniciar o OpenVPN de teste.");
+            var output = new StringBuilder();
+            process.OutputDataReceived += (_, args) =>
+            {
+                if (args.Data is not null) lock (output) output.AppendLine(args.Data);
+            };
+            process.ErrorDataReceived += (_, args) =>
+            {
+                if (args.Data is not null) lock (output) output.AppendLine(args.Data);
+            };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            try
+            {
+                using var management = new OpenVpnManagementClient(
+                    NullLogger.Instance,
+                    managementPassword: managementPassword);
+                var connected = await management.ConnectAsync(
+                    port,
+                    TimeSpan.FromSeconds(10),
+                    CancellationToken.None);
+                string processOutput;
+                lock (output) processOutput = output.ToString();
+                Assert.True(connected,
+                    $"O cliente não autenticou na interface de gerenciamento do OpenVPN real. " +
+                    $"Falha={management.StartupFailureReason}; saída={processOutput}");
+
+                await management.RequestShutdownAsync();
+            }
+            finally
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                }
+            }
+        });
+    }
+
     [Fact]
     public async Task CredentialsAreCachedInMemoryAndPersistedOnlyInUserAuthJson()
     {
@@ -318,7 +391,7 @@ public sealed class PortableDataAndOpenVpnManagementTests
             using var reader = new StreamReader(socket.GetStream(), new UTF8Encoding(false));
             using var writer = new StreamWriter(socket.GetStream(), new UTF8Encoding(false)) { AutoFlush = true };
 
-            await writer.WriteLineAsync("ENTER PASSWORD:");
+            await writer.WriteAsync("ENTER PASSWORD:");
             Assert.Equal("session-only-secret", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: password is correct");
             Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
@@ -338,7 +411,7 @@ public sealed class PortableDataAndOpenVpnManagementTests
     }
 
     [Fact]
-    public async Task ManagementClientAuthenticatesWhenServerDoesNotSendPasswordPromptFirst()
+    public async Task ManagementClientRejectsManagementConnectionWithoutPasswordPrompt()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -346,20 +419,13 @@ public sealed class PortableDataAndOpenVpnManagementTests
         var server = Task.Run(async () =>
         {
             using var socket = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            using var reader = new StreamReader(socket.GetStream(), new UTF8Encoding(false));
-            using var writer = new StreamWriter(socket.GetStream(), new UTF8Encoding(false)) { AutoFlush = true };
-
-            Assert.Equal("session-only-secret", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
-            await writer.WriteLineAsync("SUCCESS: password is correct");
-            Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
-            await writer.WriteLineAsync("SUCCESS: state on");
-            Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
-            await writer.WriteLineAsync("SUCCESS: hold release");
+            // OpenVPN's authenticated management interface must ask for its local
+            // password before accepting any command.
         });
 
         using var client = new OpenVpnManagementClient(
             NullLogger.Instance, managementPassword: "session-only-secret");
-        Assert.True(await client.ConnectAsync(port, TimeSpan.FromSeconds(5), CancellationToken.None));
+        Assert.False(await client.ConnectAsync(port, TimeSpan.FromSeconds(5), CancellationToken.None));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
@@ -383,6 +449,66 @@ public sealed class PortableDataAndOpenVpnManagementTests
         using var client = new OpenVpnManagementClient(
             NullLogger.Instance, managementPassword: "wrong-secret");
         Assert.False(await client.ConnectAsync(port, TimeSpan.FromSeconds(5), CancellationToken.None));
+        Assert.Contains("recusou a senha", client.StartupFailureReason, StringComparison.OrdinalIgnoreCase);
+        await server.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ManagementClientAllowsSlowStartupAuthenticationResponse()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var server = Task.Run(async () =>
+        {
+            using var socket = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            using var reader = new StreamReader(socket.GetStream(), new UTF8Encoding(false));
+            using var writer = new StreamWriter(socket.GetStream(), new UTF8Encoding(false)) { AutoFlush = true };
+
+            await writer.WriteLineAsync("ENTER PASSWORD:");
+            Assert.Equal("slow-start-secret", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+            await Task.Delay(TimeSpan.FromSeconds(6));
+            await writer.WriteLineAsync("SUCCESS: password is correct");
+            Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: state on");
+            Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: hold release");
+        });
+
+        using var client = new OpenVpnManagementClient(
+            NullLogger.Instance, managementPassword: "slow-start-secret");
+        Assert.True(await client.ConnectAsync(port, TimeSpan.FromSeconds(10), CancellationToken.None));
+        await server.WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
+    public async Task ManagementClientStopsWaitingWhenConnectionDeadlineExpires()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var server = Task.Run(async () =>
+        {
+            using var socket = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            using var reader = new StreamReader(socket.GetStream(), new UTF8Encoding(false));
+            using var writer = new StreamWriter(socket.GetStream(), new UTF8Encoding(false)) { AutoFlush = true };
+
+            Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: state on");
+            Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: hold release");
+            await Task.Delay(TimeSpan.FromSeconds(1));
+        });
+
+        using var client = new OpenVpnManagementClient(NullLogger.Instance);
+        Assert.True(await client.ConnectAsync(port, TimeSpan.FromSeconds(5), CancellationToken.None));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var state = await client.WaitForConnectedAsync(TimeSpan.FromMilliseconds(250), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(OpenVpnState.Unknown, state);
+        Assert.InRange(stopwatch.Elapsed, TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(2));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
@@ -508,6 +634,29 @@ public sealed class PortableDataAndOpenVpnManagementTests
 
     private static string ProtectForTest(string value) =>
         $"test:{Convert.ToBase64String(Encoding.UTF8.GetBytes(value))}";
+
+    private static string FindBundledOpenVpn()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
+             directory is not null;
+             directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "vendor", "openvpn", "bin", "openvpn.exe");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return Path.Combine(AppContext.BaseDirectory, "vendor", "openvpn", "bin", "openvpn.exe");
+    }
+
+    private static int ReservePort()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        return ((IPEndPoint)listener.LocalEndpoint).Port;
+    }
 
     private static async Task WithTemporaryDirectoryAsync(Func<string, Task> action)
     {
