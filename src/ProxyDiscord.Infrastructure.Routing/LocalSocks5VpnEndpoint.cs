@@ -264,23 +264,31 @@ internal sealed class LocalSocks5VpnEndpoint(TunnelDiagnostics diagnostics, ILog
         using var vpnSocket = VpnBoundSocketFactory.CreateUdpSocket(_adapter!);
         DisableUdpConnectionReset(vpnSocket);
         using var association = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var controlClosed = WatchControlConnectionAsync(controlStream, association.Token);
         var clientBuffer = new byte[65535];
         var remoteBuffer = new byte[65535];
         EndPoint clientTemplate = new IPEndPoint(IPAddress.Any, 0);
         EndPoint remoteTemplate = new IPEndPoint(IPAddress.Any, 0);
-        Task<SocketReceiveFromResult> clientReceive = clientSocket.ReceiveFromAsync(clientBuffer, SocketFlags.None, clientTemplate, association.Token).AsTask();
-        Task<SocketReceiveFromResult> remoteReceive = vpnSocket.ReceiveFromAsync(remoteBuffer, SocketFlags.None, remoteTemplate, association.Token).AsTask();
+        Task? controlClosed = null;
+        Task<SocketReceiveFromResult>? clientReceive = null;
+        Task<SocketReceiveFromResult>? remoteReceive = null;
         IPEndPoint? associatedClient = null;
         var destinations = new HashSet<IPEndPoint>();
         var dnsQueries = new Dictionary<ushort, DnsQueryRoute>();
 
         try
         {
+            controlClosed = WatchControlConnectionAsync(controlStream, association.Token);
+            clientReceive = clientSocket.ReceiveFromAsync(clientBuffer, SocketFlags.None, clientTemplate, association.Token).AsTask();
+            remoteReceive = vpnSocket.ReceiveFromAsync(remoteBuffer, SocketFlags.None, remoteTemplate, association.Token).AsTask();
+
             while (!association.IsCancellationRequested)
             {
                 var completed = await Task.WhenAny(clientReceive, remoteReceive, controlClosed);
-                if (completed == controlClosed) return;
+                if (completed == controlClosed)
+                {
+                    await controlClosed;
+                    return;
+                }
 
                 if (completed == clientReceive)
                 {
@@ -352,7 +360,18 @@ internal sealed class LocalSocks5VpnEndpoint(TunnelDiagnostics diagnostics, ILog
         finally
         {
             association.Cancel();
-            try { await controlClosed; } catch (Exception) { }
+            clientSocket.Dispose();
+            vpnSocket.Dispose();
+
+            // WhenAny não observa as operações restantes. Drene todas antes de encerrar
+            // a associação, inclusive se uma das leituras falhou ao ser iniciada.
+            Task?[] pending = [clientReceive, remoteReceive, controlClosed];
+            try { await Task.WhenAll(pending.OfType<Task>()); }
+            catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException) { }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Falha ao encerrar a associação UDP SOCKS5");
+            }
         }
     }
 

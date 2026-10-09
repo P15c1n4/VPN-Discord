@@ -12,6 +12,33 @@ namespace ProxyDiscord.Application.Tests;
 
 public sealed class ConnectVpnUseCaseTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void RealSessionFailureStillStopsRoutingAndDisconnectsTheVpn(bool vpnFailed)
+    {
+        var vpn = new FakeVpnConnection();
+        var routing = new FakeRoutingEngine();
+        var routes = new FakeRouteManager();
+        var state = new FakeStateStore();
+        var session = new RoutingSessionContext();
+        session.SetConnected(null);
+        var disconnect = new DisconnectVpnUseCase(routing, vpn, routes, state, session,
+            NullLogger<DisconnectVpnUseCase>.Instance);
+        using var supervisor = new VpnConnectionSupervisor(vpn, routing, disconnect, session,
+            NullLogger<VpnConnectionSupervisor>.Instance);
+
+        if (vpnFailed) vpn.LoseConnection("Falha real na VPN");
+        else routing.Fail("Falha real no roteamento");
+
+        Assert.Equal(ConnectionStatus.Error, session.Status);
+        Assert.Contains("Falha real", session.LastError);
+        Assert.Equal(1, routing.StopCount);
+        Assert.Equal(1, vpn.DisconnectCount);
+        Assert.Equal(1, routes.RemoveCount);
+        Assert.Equal(1, state.ClearCount);
+    }
+
     [Fact]
     public async Task UnexpectedPostConnectFailure_SetsErrorAndRollsBackInsteadOfStayingConnecting()
     {
@@ -48,11 +75,8 @@ public sealed class ConnectVpnUseCaseTests
     private sealed class FakeVpnConnection : IVpnConnection
     {
         public int DisconnectCount { get; private set; }
-        public event EventHandler<VpnConnectionLostEventArgs>? ConnectionLost
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<VpnConnectionLostEventArgs>? ConnectionLost;
+        public void LoseConnection(string reason) => ConnectionLost?.Invoke(this, new VpnConnectionLostEventArgs(reason));
 
         public Task<VpnConnectionResult> ConnectAsync(VpnConnectionRequest request, CancellationToken cancellationToken = default) =>
             Task.FromResult(VpnConnectionResult.Ok(VpnLinkStatus.Connected));
@@ -104,11 +128,9 @@ public sealed class ConnectVpnUseCaseTests
             add { }
             remove { }
         }
-        public event EventHandler<RoutingEngineFailureEventArgs>? Failed
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<RoutingEngineFailureEventArgs>? Failed;
+        public void Fail(string reason) => Failed?.Invoke(this, new RoutingEngineFailureEventArgs(reason));
+        public int StopCount { get; private set; }
         public bool IsRunning => false;
         public Task StartAsync(
             TargetProcessSelector target,
@@ -117,14 +139,23 @@ public sealed class ConnectVpnUseCaseTests
             TunnelProtocolScope scope = TunnelProtocolScope.TcpAndUdp,
             ProcessRoutingBackend backend = ProcessRoutingBackend.WinDivert,
             CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            StopCount++;
+            return Task.CompletedTask;
+        }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeStateStore : IConnectionStateStore
     {
+        public int ClearCount { get; private set; }
         public Task WriteActiveStateAsync(ConnectionStateRecord record, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ClearStateAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ClearStateAsync(CancellationToken cancellationToken = default)
+        {
+            ClearCount++;
+            return Task.CompletedTask;
+        }
         public Task<ConnectionStateRecord?> TryReadStaleStateAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<ConnectionStateRecord?>(null);
     }

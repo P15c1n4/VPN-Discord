@@ -68,10 +68,7 @@ public partial class App : System.Windows.Application
         DispatcherUnhandledException += (_, args) =>
             RunCleanup($"DispatcherUnhandledException: {args.Exception}", ABRUPT_CLEANUP_BUDGET);
         System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, args) =>
-        {
-            RunCleanup($"UnobservedTaskException: {args.Exception}", ABRUPT_CLEANUP_BUDGET);
-            args.SetObserved();
-        };
+            ObserveBackgroundTaskException(args, _logger);
 
         // Logoff/desligamento do Windows: a janela pode estar escondida na bandeja, e ninguém vai
         // clicar em nada. Desfaz o túnel aqui, enquanto o sistema ainda espera pelo processo.
@@ -141,6 +138,20 @@ public partial class App : System.Windows.Application
 
     public void ExitForUpdate() => ExitApplication();
 
+    internal static void ObserveBackgroundTaskException(UnobservedTaskExceptionEventArgs args, ILogger? logger)
+    {
+        // O evento pode chegar pelo GC depois que uma conexão ou sessão já terminou.
+        // A perda da sessão ativa é tratada pelo VpnConnectionSupervisor.
+        args.SetObserved();
+        if (args.Exception.Flatten().InnerExceptions.All(exception => exception is OperationCanceledException))
+        {
+            logger?.LogDebug(args.Exception, "Tarefa de segundo plano cancelada");
+            return;
+        }
+
+        logger?.LogError(args.Exception, "Falha não observada em tarefa de segundo plano");
+    }
+
     private void ShowMainWindow()
     {
         if (MainWindow is not { } window)
@@ -198,10 +209,8 @@ public partial class App : System.Windows.Application
     }
 
     // Desfaz VPN, rota e motor de roteamento. Chamável quantas vezes for preciso — o
-    // DisconnectVpnUseCase é idempotente por construção (§2.4) e o lock só impede que dois
-    // handlers rodem a limpeza ao mesmo tempo. Um guard de execução única seria pior: um
-    // UnobservedTaskException qualquer no meio da sessão o consumiria, e a saída de verdade
-    // sairia sem limpar nada.
+    // DisconnectVpnUseCase é idempotente por construção e o lock impede que dois
+    // handlers rodem a limpeza ao mesmo tempo.
     private void RunCleanup(string reason, TimeSpan budget)
     {
         if (_services is null)
