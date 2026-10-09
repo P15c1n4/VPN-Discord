@@ -63,7 +63,7 @@ internal sealed class VpnGateEntryMapper(ILogger<VpnGateEntryMapper> logger)
             openVpnTransport = info.Transport;
         }
 
-        var sstpEndpoint = ResolveSstpEndpoint(row.HostName, hostName, protocolSupport);
+        var sstpEndpoint = ResolveSstpEndpoint(row.HostName, protocolSupport);
 
         return new VpnGateServerEntry(
             HostName: row.HostName,
@@ -86,7 +86,7 @@ internal sealed class VpnGateEntryMapper(ILogger<VpnGateEntryMapper> logger)
     }
 
     private static HostEndpoint? ResolveSstpEndpoint(
-        string rawHostName, string ddnsHostName, IReadOnlyDictionary<string, VpnGateProtocolSupport> protocolSupport)
+        string rawHostName, IReadOnlyDictionary<string, VpnGateProtocolSupport> protocolSupport)
     {
         var key = rawHostName.Trim();
         if (key.EndsWith(DDNS_SUFFIX, StringComparison.OrdinalIgnoreCase))

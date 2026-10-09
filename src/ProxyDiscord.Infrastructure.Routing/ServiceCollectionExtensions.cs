@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using ProxyDiscord.Application.Diagnostics;
 using ProxyDiscord.Application.Ports;
 
 namespace ProxyDiscord.Infrastructure.Routing;
@@ -12,7 +14,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<FlowRegistry>();
         services.AddSingleton<TcpTunnelRelay>();
         services.AddSingleton<UdpTunnelRelay>();
-        services.AddSingleton<IProcessRoutingEngine, ProcessRoutingEngine>();
+        services.AddSingleton<ProcessRoutingEngine>();
+        services.AddSingleton<LocalSocks5VpnEndpoint>();
+        services.AddSingleton<ProxiFyreRoutingEngine>(sp => new ProxiFyreRoutingEngine(
+            sp.GetRequiredService<LocalSocks5VpnEndpoint>(),
+            sp.GetRequiredService<TunnelDiagnostics>(),
+            sp.GetRequiredService<ILogger<ProxiFyreRoutingEngine>>()));
+        services.AddSingleton<IProcessRoutingEngine, ProcessRoutingEngineSelector>();
         services.AddSingleton<IVpnRouteManager, VpnRouteManager>();
         services.AddSingleton<IVpnEgressSelfTest, VpnEgressSelfTest>();
         services.AddSingleton<IOutboundInterfaceResolver, OutboundInterfaceResolver>();

@@ -16,6 +16,14 @@ Empowered by IA.
 ---
 ## USO
 
+### Motor de roteamento ProxiFyre
+
+O motor pode ser selecionado em **Configurações → Motor de roteamento**; a escolha fica salva em `config.json` e vale para a próxima conexão. WinDivert continua sendo o padrão.
+
+Para usar ProxiFyre, coloque o payload x64 oficial em `vendor/proxifyre/x64` antes de compilar. A publicação copia os arquivos para `proxifyre/managed` e inclui o script `Instalar-WindowsPacketFilter.ps1`. Execute-o antes da primeira conexão ProxiFyre se o Windows Packet Filter não estiver instalado. O script baixa o MSI x64 oficial, valida tamanho, SHA-256 e assinatura Authenticode e pede elevação para instalar; não instala o serviço do ProxiFyre nem remove drivers. O MSI não é embutido no ZIP. O runtime Visual C++ correspondente e o .NET Framework 4.7.2 ou superior também são necessários, mas não são instalados por esse script. Se o Firewall bloquear as conexões locais do ProxiFyre, será necessário permitir o executável nas regras do Windows.
+
+Nesse modo, o ProxiFyre direciona TCP/UDP IPv4 do processo selecionado a um endpoint SOCKS5 local, cuja saída é vinculada à interface VPN. IPv6 não é roteado por essa configuração. O ProxiFyre identifica aplicativos por nome/caminho e pode tratar caminhos como correspondências parciais; o WinDivert continua sendo a opção mais estrita quando há executáveis com caminhos semelhantes. A sessão usa configuração e logs próprios dentro de `proxifyre/managed`.
+
 ### Interface
 
 <img width="885" height="684" alt="image" src="https://github.com/user-attachments/assets/b0e8e5dc-0231-492e-a625-9437443f2d4d" />

@@ -136,7 +136,13 @@ public sealed class ConnectVpnUseCase(
             try
             {
                 SetStage("inicialização do roteamento por processo");
-                await routingEngine.StartAsync(target, adapter, command.DnsSettings, command.ProtocolScope, operationToken);
+                await routingEngine.StartAsync(
+                    target,
+                    adapter,
+                    command.DnsSettings,
+                    command.ProtocolScope,
+                    command.RoutingBackend,
+                    operationToken);
             }
             catch (Exception ex)
             {
@@ -223,6 +229,15 @@ public sealed class ConnectVpnUseCase(
 
     private async Task RollbackAsync(CancellationToken cancellationToken)
     {
+        try
+        {
+            await routingEngine.StopAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao parar o roteamento durante o rollback");
+        }
+
         try
         {
             routeManager.RemoveTunnelDefaultRoute();

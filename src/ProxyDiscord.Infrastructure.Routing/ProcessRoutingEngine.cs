@@ -40,6 +40,7 @@ public sealed class ProcessRoutingEngine(
     private Task? _captureLoopTask;
     private Task? _socketLoopTask;
     private volatile bool _running;
+    private bool _sessionStarted;
     private int _relayPort;
     private int _udpRelayPort;
     private TunnelProtocolScope _scope = TunnelProtocolScope.TcpAndUdp;
@@ -47,17 +48,24 @@ public sealed class ProcessRoutingEngine(
     public bool IsRunning => _running;
 
     public event EventHandler? TrafficObserved;
+    public event EventHandler<RoutingEngineFailureEventArgs>? Failed;
 
     public async Task StartAsync(
         TargetProcessSelector target,
         VpnAdapterInfo vpnAdapter,
         TunnelDnsSettings dnsSettings,
         TunnelProtocolScope scope = TunnelProtocolScope.TcpAndUdp,
+        ProcessRoutingBackend backend = ProcessRoutingBackend.WinDivert,
         CancellationToken cancellationToken = default)
     {
         await _lifecycleGate.WaitAsync(cancellationToken);
         try
         {
+            if (backend != ProcessRoutingBackend.WinDivert)
+            {
+                throw new InvalidOperationException("O motor WinDivert recebeu uma solicitação para outro backend.");
+            }
+
             await StartCoreAsync(target, vpnAdapter, dnsSettings, scope, cancellationToken);
         }
         finally
@@ -80,6 +88,7 @@ public sealed class ProcessRoutingEngine(
 
         _scope = scope;
         diagnostics.Reset();
+        diagnostics.SetBackend(ProcessRoutingBackend.WinDivert);
         diagnostics.SetScope(scope);
 
         flows.Clear();
@@ -118,9 +127,11 @@ public sealed class ProcessRoutingEngine(
             _socketEvents = handleFactory.OpenSocketEvents(SOCKET_EVENT_FILTER);
             _handle = handleFactory.OpenNetwork(CaptureFilterFor(scope));
             _running = true;
+            diagnostics.SetRoutingEngineRunning(true);
 
             _socketLoopTask = Task.Run(SocketEventLoop, CancellationToken.None);
             _captureLoopTask = Task.Run(CaptureLoop, CancellationToken.None);
+            _sessionStarted = true;
         }
         catch
         {
@@ -144,7 +155,9 @@ public sealed class ProcessRoutingEngine(
         await _lifecycleGate.WaitAsync(cancellationToken);
         try
         {
-            await TearDownAsync(unloadWinDivertDriver: true);
+            var unloadWinDivertDriver = _sessionStarted;
+            _sessionStarted = false;
+            await TearDownAsync(unloadWinDivertDriver);
             logger.LogInformation("Motor de roteamento parado. {Report}", diagnostics.BuildReport());
         }
         finally
@@ -161,6 +174,7 @@ public sealed class ProcessRoutingEngine(
     private async Task TearDownAsync(bool unloadWinDivertDriver)
     {
         _running = false;
+        diagnostics.SetRoutingEngineRunning(false);
 
         try
         {
@@ -323,14 +337,14 @@ public sealed class ProcessRoutingEngine(
                     logger.LogError(ex, "Erro ao capturar pacote; motor de roteamento será interrompido");
                 }
 
-                MarkStopped();
+                MarkStopped(ex.Message);
                 return;
             }
 
             if (!received)
             {
                 ReportLoopExit("camada NETWORK", win32Error);
-                MarkStopped();
+                MarkStopped($"A camada NETWORK terminou com erro Win32 {win32Error}.");
                 return;
             }
 
@@ -355,7 +369,13 @@ public sealed class ProcessRoutingEngine(
         }
     }
 
-    private void MarkStopped() => _running = false;
+    private void MarkStopped(string reason)
+    {
+        if (!_running) return;
+        _running = false;
+        diagnostics.SetRoutingEngineRunning(false);
+        Failed?.Invoke(this, new RoutingEngineFailureEventArgs(reason));
+    }
 
     private void ReportLoopExit(string stage, int win32Error)
     {

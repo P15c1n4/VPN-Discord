@@ -24,6 +24,17 @@
                           IsChecked="{Binding SavePasswordAfterConnectionEnabled, Mode=OneWay}"
                           Click="SavePasswordAfterConnection_Click"/>
                 <Separator/>
+                <MenuItem Header="Motor de roteamento">
+                    <MenuItem Header="WinDivert"
+                              IsCheckable="True"
+                              IsChecked="{Binding IsWinDivertSelected, Mode=OneWay}"
+                              Click="WinDivertBackend_Click"/>
+                    <MenuItem Header="ProxiFyre"
+                              IsCheckable="True"
+                              IsChecked="{Binding IsProxiFyreSelected, Mode=OneWay}"
+                              Click="ProxiFyreBackend_Click"/>
+                </MenuItem>
+                <Separator/>
                 <MenuItem Header="Verificar atualizações"
                           Command="{Binding CheckForUpdatesCommand}"/>
             </MenuItem>

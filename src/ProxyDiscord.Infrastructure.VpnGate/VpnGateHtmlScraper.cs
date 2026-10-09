@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ProxyDiscord.Infrastructure.VpnGate;
 
-internal readonly record struct VpnGateProtocolSupport(string HostName, string? SstpHostName);
+internal readonly record struct VpnGateProtocolSupport(string? SstpHostName);
 
 internal sealed partial class VpnGateHtmlScraper(ILogger<VpnGateHtmlScraper> logger)
 {
@@ -35,7 +35,7 @@ internal sealed partial class VpnGateHtmlScraper(ILogger<VpnGateHtmlScraper> log
             var sstpMatch = SstpHostName().Match(row);
             var sstpHost = sstpMatch.Success ? sstpMatch.Groups["host"].Value : null;
 
-            support[hostName] = new VpnGateProtocolSupport(hostName, sstpHost);
+            support[hostName] = new VpnGateProtocolSupport(sstpHost);
         }
 
         logger.LogDebug(

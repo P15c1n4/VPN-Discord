@@ -105,7 +105,6 @@ public sealed class TcpTunnelRelay(FlowRegistry flows, TunnelDiagnostics diagnos
             {
                 logger.LogWarning(
                     "Conexão no relay da porta {Port} sem destino original conhecido; descartando.", sourcePort);
-                client.Dispose();
                 return;
             }
 
@@ -126,8 +125,6 @@ public sealed class TcpTunnelRelay(FlowRegistry flows, TunnelDiagnostics diagnos
                     ex.SocketErrorCode == SocketError.NetworkUnreachable
                         ? "A interface VPN não tem rota para esse destino — verifique a rota do túnel."
                         : string.Empty);
-                client.Dispose();
-                upstream.Dispose();
                 return;
             }
 

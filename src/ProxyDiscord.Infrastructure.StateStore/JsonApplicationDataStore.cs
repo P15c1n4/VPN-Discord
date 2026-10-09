@@ -62,7 +62,14 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
         {
             await EnsureLoadedLockedAsync(cancellationToken);
             var configuration = _configuration!;
-            return new UserConfiguration(configuration.SaveCredentialsEnabled, configuration.SavePasswordAfterConnectionEnabled);
+            var backend = Enum.TryParse<ProcessRoutingBackend>(configuration.RoutingBackend, true, out var parsedBackend) &&
+                          Enum.IsDefined(parsedBackend)
+                ? parsedBackend
+                : ProcessRoutingBackend.WinDivert;
+            return new UserConfiguration(
+                configuration.SaveCredentialsEnabled,
+                configuration.SavePasswordAfterConnectionEnabled,
+                backend);
         }
         finally
         {
@@ -80,6 +87,7 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
             {
                 SaveCredentialsEnabled = configuration.SaveCredentialsEnabled,
                 SavePasswordAfterConnectionEnabled = configuration.SavePasswordAfterConnectionEnabled,
+                RoutingBackend = configuration.RoutingBackend.ToString(),
             };
             await JsonFile.WriteAtomicallyAsync(_configPath, updated, JSON_OPTIONS, cancellationToken);
             _configuration = updated;
@@ -317,6 +325,7 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
         public ConfigurationDocument() { }
         public bool SaveCredentialsEnabled { get; set; }
         public bool SavePasswordAfterConnectionEnabled { get; set; }
+        public string RoutingBackend { get; set; } = ProcessRoutingBackend.WinDivert.ToString();
     }
 
     private sealed class CredentialDocument

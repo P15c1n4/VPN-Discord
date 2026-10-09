@@ -77,7 +77,7 @@ internal static class ProcessRunner
                 process.Kill(entireProcessTree: true);
             }
         }
-        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or SystemException)
+        catch (SystemException)
         {
         }
     }

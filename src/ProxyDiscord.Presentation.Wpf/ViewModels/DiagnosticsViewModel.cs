@@ -5,6 +5,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ProxyDiscord.Application.Diagnostics;
+using ProxyDiscord.Application.Dtos;
 
 namespace ProxyDiscord.Presentation.Wpf.ViewModels;
 
@@ -60,8 +61,10 @@ public sealed partial class DiagnosticsViewModel : ObservableObject, IDisposable
         _lastUdpBytesDown = udp.BytesDown;
         _lastSampleTimestamp = now;
 
-        var stages = new List<DiagnosticStage>
+        var stages = new List<DiagnosticStage>();
+        if (_diagnostics.Backend == ProcessRoutingBackend.WinDivert)
         {
+            stages.AddRange([
             new("Captura de tráfego",
                 $"{_diagnostics.NetworkPacketsSeen} pacotes; {_diagnostics.SocketEventsSeen} eventos de socket" +
                 (_diagnostics.LastCaptureError == 0 ? "" : $"; código Win32 {_diagnostics.LastCaptureError}"),
@@ -81,29 +84,45 @@ public sealed partial class DiagnosticsViewModel : ObservableObject, IDisposable
                 (_diagnostics.Ipv6Dropped > 0 ? $"; IPv6 ignorado {_diagnostics.Ipv6Dropped}" : ""),
                 tcp.Redirected + udp.Redirected > 0),
 
+            new("Pacotes reinjetados",
+                $"{_diagnostics.InjectOk} ok; {_diagnostics.InjectFailed} falhas" +
+                (_diagnostics.LastInjectError == 0 ? "" : $"; código Win32 {_diagnostics.LastInjectError}"),
+                _diagnostics.InjectOk > 0 && _diagnostics.InjectFailed == 0),
+            ]);
+        }
+        else
+        {
+            stages.Add(new(
+                "Motor ProxiFyre",
+                _diagnostics.RoutingEngineRunning ? "Em execução" : "Parado",
+                _diagnostics.RoutingEngineRunning));
+            stages.Add(new(
+                "Família de endereço",
+                "IPv4; IPv6 não encaminhado por esta configuração",
+                true));
+        }
+
+        stages.AddRange([
             new("Conexões pela VPN",
                 $"TCP {tcp.UpstreamOk} ok/{tcp.UpstreamFailed} falhas; UDP {udp.UpstreamOk} ok/{udp.UpstreamFailed} falhas",
                 tcp.UpstreamOk + udp.UpstreamOk > 0 && tcp.UpstreamFailed + udp.UpstreamFailed == 0),
 
             new("Dados transferidos",
-                $"TCP: {Format(tcp.BytesUp)} enviados, {Format(tcp.BytesDown)} recebidos\n" +
+                $"TCP: {TunnelDiagnostics.FormatBytes(tcp.BytesUp)} enviados, " +
+                $"{TunnelDiagnostics.FormatBytes(tcp.BytesDown)} recebidos\n" +
                 $"TCP: {FormatRate(tcpUpRate)} enviados, {FormatRate(tcpDownRate)} recebidos",
                 tcp.BytesUp + tcp.BytesDown > 0),
 
             new("Dados transferidos",
-                $"UDP: {Format(udp.BytesUp)} enviados, {Format(udp.BytesDown)} recebidos\n" +
+                $"UDP: {TunnelDiagnostics.FormatBytes(udp.BytesUp)} enviados, " +
+                $"{TunnelDiagnostics.FormatBytes(udp.BytesDown)} recebidos\n" +
                 $"UDP: {FormatRate(udpUpRate)} enviados, {FormatRate(udpDownRate)} recebidos",
                 udp.BytesUp + udp.BytesDown > 0),
-
-            new("Pacotes reinjetados",
-                $"{_diagnostics.InjectOk} ok; {_diagnostics.InjectFailed} falhas" +
-                (_diagnostics.LastInjectError == 0 ? "" : $"; código Win32 {_diagnostics.LastInjectError}"),
-                _diagnostics.InjectOk > 0 && _diagnostics.InjectFailed == 0),
 
             new("Teste de saída",
                 selfTest?.Summary ?? "Não executado",
                 selfTest?.Success ?? false),
-        };
+        ]);
 
         Stages.Clear();
         foreach (var stage in stages)
@@ -120,8 +139,6 @@ public sealed partial class DiagnosticsViewModel : ObservableObject, IDisposable
         ScopeText = TunnelDiagnostics.DescribeScope(_diagnostics.Scope);
     }
 
-    private static string Format(long bytes) => TunnelDiagnostics.FormatBytes(bytes);
-
     private static long CalculateRate(long current, long previous, double elapsedSeconds)
     {
         if (elapsedSeconds <= 0 || current <= previous)
@@ -132,7 +149,8 @@ public sealed partial class DiagnosticsViewModel : ObservableObject, IDisposable
         return (long)((current - previous) / elapsedSeconds);
     }
 
-    private static string FormatRate(long bytesPerSecond) => $"{Format(bytesPerSecond)}/s";
+    private static string FormatRate(long bytesPerSecond) =>
+        $"{TunnelDiagnostics.FormatBytes(bytesPerSecond)}/s";
 
     [RelayCommand]
     private void OpenLogFolder()

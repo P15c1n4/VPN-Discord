@@ -146,6 +146,18 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool _savePasswordAfterConnectionEnabled;
 
     [ObservableProperty]
+    private ProcessRoutingBackend _selectedRoutingBackend = ProcessRoutingBackend.WinDivert;
+
+    public bool IsWinDivertSelected => SelectedRoutingBackend == ProcessRoutingBackend.WinDivert;
+    public bool IsProxiFyreSelected => SelectedRoutingBackend == ProcessRoutingBackend.ProxiFyre;
+
+    partial void OnSelectedRoutingBackendChanged(ProcessRoutingBackend value)
+    {
+        OnPropertyChanged(nameof(IsWinDivertSelected));
+        OnPropertyChanged(nameof(IsProxiFyreSelected));
+    }
+
+    [ObservableProperty]
     private string _dnsServer = TunnelDnsSettings.GOOGLE_PUBLIC_DNS;
 
     public IReadOnlyList<string> DnsSuggestions { get; } = TunnelDnsSettings.Suggestions;
@@ -277,6 +289,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             var configuration = await _savedCredentialsUseCase.ReadConfigurationAsync();
             SaveCredentialsEnabled = configuration.SaveCredentialsEnabled;
             SavePasswordAfterConnectionEnabled = configuration.SavePasswordAfterConnectionEnabled;
+            SelectedRoutingBackend = configuration.RoutingBackend;
         }
         catch (Exception ex)
         {
@@ -379,7 +392,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             await _savedCredentialsUseCase.WriteConfigurationAsync(
-                new UserConfiguration(enabled, SavePasswordAfterConnectionEnabled));
+                CurrentConfiguration(saveCredentialsEnabled: enabled));
         }
         catch (Exception ex)
         {
@@ -427,7 +440,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             await _savedCredentialsUseCase.WriteConfigurationAsync(
-                new UserConfiguration(SaveCredentialsEnabled, enabled));
+                CurrentConfiguration(savePasswordAfterConnectionEnabled: enabled));
         }
         catch (Exception ex)
         {
@@ -455,6 +468,36 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         _manualPasswordValue = string.IsNullOrEmpty(value) ? null : value;
         Password = value;
     }
+
+    public async Task SetRoutingBackendAsync(ProcessRoutingBackend backend)
+    {
+        if (!Enum.IsDefined(backend))
+        {
+            return;
+        }
+
+        var previousValue = SelectedRoutingBackend;
+        SelectedRoutingBackend = backend;
+        try
+        {
+            await _savedCredentialsUseCase.WriteConfigurationAsync(CurrentConfiguration(routingBackend: backend));
+        }
+        catch (Exception ex)
+        {
+            SelectedRoutingBackend = previousValue;
+            ErrorMessage = "Não foi possível salvar as configurações. Tente novamente.";
+            _logger.LogWarning(ex, "Falha ao salvar o motor de roteamento selecionado");
+        }
+    }
+
+    private UserConfiguration CurrentConfiguration(
+        bool? saveCredentialsEnabled = null,
+        bool? savePasswordAfterConnectionEnabled = null,
+        ProcessRoutingBackend? routingBackend = null) =>
+        new(
+            saveCredentialsEnabled ?? SaveCredentialsEnabled,
+            savePasswordAfterConnectionEnabled ?? SavePasswordAfterConnectionEnabled,
+            routingBackend ?? SelectedRoutingBackend);
 
     public async Task LoadSavedCredentialsForCurrentServerAsync(bool preserveCurrentCredentials = false)
     {
@@ -625,7 +668,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             _selectedOpenVpnConfig,
             new TunnelDnsSettings(DnsServer),
             SelectedProtocolScope,
-            useProfileCredentials);
+            useProfileCredentials,
+            SelectedRoutingBackend);
 
         var result = await _connectVpnUseCase.ExecuteAsync(command);
         if (!result.Success)

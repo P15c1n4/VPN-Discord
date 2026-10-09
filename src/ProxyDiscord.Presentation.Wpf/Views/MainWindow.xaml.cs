@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using ProxyDiscord.Application.Dtos;
 using ProxyDiscord.Presentation.Wpf.Shell;
 using ProxyDiscord.Presentation.Wpf.ViewModels;
 
@@ -89,6 +90,12 @@ public partial class MainWindow : Window
             await _viewModel.SetSavePasswordAfterConnectionEnabledAsync(enabled);
         }
     }
+
+    private async void WinDivertBackend_Click(object sender, RoutedEventArgs e) =>
+        await _viewModel.SetRoutingBackendAsync(ProcessRoutingBackend.WinDivert);
+
+    private async void ProxiFyreBackend_Click(object sender, RoutedEventArgs e) =>
+        await _viewModel.SetRoutingBackendAsync(ProcessRoutingBackend.ProxiFyre);
 
     private async void ServerIdentity_LostFocus(object sender, RoutedEventArgs e) =>
         await _viewModel.LoadSavedCredentialsForCurrentServerAsync();

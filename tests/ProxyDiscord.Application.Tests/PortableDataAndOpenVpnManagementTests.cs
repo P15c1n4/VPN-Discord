@@ -159,6 +159,24 @@ public sealed class PortableDataAndOpenVpnManagementTests
     }
 
     [Fact]
+    public async Task RoutingBackendPreference_RoundTripsAndOldConfigDefaultsToWinDivert()
+    {
+        await WithTemporaryDirectoryAsync(async directory =>
+        {
+            var store = CreateTestStore(directory);
+            await store.WriteAsync(new UserConfiguration(true, false, ProcessRoutingBackend.ProxiFyre));
+
+            var written = await File.ReadAllTextAsync(Path.Combine(directory, "config.json"));
+            Assert.Contains("\"routingBackend\": \"ProxiFyre\"", written, StringComparison.Ordinal);
+            Assert.Equal(ProcessRoutingBackend.ProxiFyre, (await CreateTestStore(directory).ReadAsync()).RoutingBackend);
+
+            await File.WriteAllTextAsync(Path.Combine(directory, "config.json"),
+                "{\"saveCredentialsEnabled\":true,\"savePasswordAfterConnectionEnabled\":false}");
+            Assert.Equal(ProcessRoutingBackend.WinDivert, (await CreateTestStore(directory).ReadAsync()).RoutingBackend);
+        });
+    }
+
+    [Fact]
     public async Task MigrationMergesDistinctServersWithoutLosingExistingCredentials()
     {
         await WithTemporaryDirectoryAsync(async directory =>
@@ -331,6 +349,8 @@ public sealed class PortableDataAndOpenVpnManagementTests
 
             Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: state on");
+            Assert.Equal("hold off", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: hold flag set to OFF");
             Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: hold release");
             await writer.WriteLineAsync(">PASSWORD:Need 'Auth' username/password");
@@ -396,6 +416,8 @@ public sealed class PortableDataAndOpenVpnManagementTests
             await writer.WriteLineAsync("SUCCESS: password is correct");
             Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: state on");
+            Assert.Equal("hold off", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: hold flag set to OFF");
             Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: hold release");
             await writer.WriteLineAsync(">STATE:2026-09-26 12:00:00,CONNECTED,SUCCESS,10.8.0.2,10.8.0.1");
@@ -471,6 +493,8 @@ public sealed class PortableDataAndOpenVpnManagementTests
             await writer.WriteLineAsync("SUCCESS: password is correct");
             Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: state on");
+            Assert.Equal("hold off", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: hold flag set to OFF");
             Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: hold release");
         });
@@ -495,6 +519,8 @@ public sealed class PortableDataAndOpenVpnManagementTests
 
             Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: state on");
+            Assert.Equal("hold off", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: hold flag set to OFF");
             Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: hold release");
             await Task.Delay(TimeSpan.FromSeconds(1));
@@ -526,6 +552,8 @@ public sealed class PortableDataAndOpenVpnManagementTests
             using var writer = new StreamWriter(socket.GetStream(), new UTF8Encoding(false)) { AutoFlush = true };
             Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: state on");
+            Assert.Equal("hold off", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: hold flag set to OFF");
             Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: hold release");
             await writer.WriteLineAsync(">PASSWORD:Need 'Private Key' password");
@@ -556,6 +584,8 @@ public sealed class PortableDataAndOpenVpnManagementTests
             using var writer = new StreamWriter(socket.GetStream(), new UTF8Encoding(false)) { AutoFlush = true };
             Assert.Equal("state on", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: state on");
+            Assert.Equal("hold off", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: hold flag set to OFF");
             Assert.Equal("hold release", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
             await writer.WriteLineAsync("SUCCESS: hold release");
             await writer.WriteLineAsync(">PASSWORD:Need 'Auth' username/password SC:E:Token code");

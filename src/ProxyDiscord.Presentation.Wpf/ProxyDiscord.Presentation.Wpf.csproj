@@ -50,6 +50,12 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Visible>false</Visible>
     </None>
+    <None Include="..\..\scripts\Instalar-WindowsPacketFilter.ps1">
+      <Link>Instalar-WindowsPacketFilter.ps1</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Visible>false</Visible>
+    </None>
   </ItemGroup>
 
   <Import Project="..\..\build\VendoredNatives.props" />

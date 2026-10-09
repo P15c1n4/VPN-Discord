@@ -5,6 +5,7 @@
     <ProjectReference Include="..\..\src\ProxyDiscord.Domain\ProxyDiscord.Domain.csproj" />
     <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.StateStore\ProxyDiscord.Infrastructure.StateStore.csproj" />
     <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.OpenVpn\ProxyDiscord.Infrastructure.OpenVpn.csproj" />
+    <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.Routing\ProxyDiscord.Infrastructure.Routing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

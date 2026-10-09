@@ -10,6 +10,7 @@ public interface IProcessRoutingEngine : IAsyncDisposable
         VpnAdapterInfo vpnAdapter,
         TunnelDnsSettings dnsSettings,
         TunnelProtocolScope scope = TunnelProtocolScope.TcpAndUdp,
+        ProcessRoutingBackend backend = ProcessRoutingBackend.WinDivert,
         CancellationToken cancellationToken = default);
 
     Task StopAsync(CancellationToken cancellationToken = default);
@@ -17,4 +18,10 @@ public interface IProcessRoutingEngine : IAsyncDisposable
     bool IsRunning { get; }
 
     event EventHandler? TrafficObserved;
+    event EventHandler<RoutingEngineFailureEventArgs>? Failed;
+}
+
+public sealed class RoutingEngineFailureEventArgs(string reason) : EventArgs
+{
+    public string Reason { get; } = reason;
 }

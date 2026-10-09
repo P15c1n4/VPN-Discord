@@ -729,7 +729,7 @@ internal sealed class OpenVpnConnection(
                 logger.LogWarning("O OpenVPN não encerrou em {Seconds}s; finalizando.", SHUTDOWN_GRACE.TotalSeconds);
                 process.Kill(entireProcessTree: true);
             }
-            catch (Exception ex) when (ex is InvalidOperationException or SystemException)
+            catch (SystemException)
             {
             }
         }

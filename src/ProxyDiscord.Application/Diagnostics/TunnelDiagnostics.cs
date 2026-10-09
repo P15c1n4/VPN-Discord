@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using ProxyDiscord.Application.Dtos;
 using ProxyDiscord.Domain.ValueObjects;
 
 namespace ProxyDiscord.Application.Diagnostics;
@@ -46,6 +47,8 @@ public sealed class TunnelDiagnostics
     public EgressSelfTestResult? EgressSelfTest { get; private set; }
 
     public TunnelProtocolScope Scope { get; private set; } = TunnelProtocolScope.TcpAndUdp;
+    public ProcessRoutingBackend Backend { get; private set; } = ProcessRoutingBackend.WinDivert;
+    public bool RoutingEngineRunning { get; private set; }
 
     public ProtocolSnapshot Tcp => _tcp.Snapshot();
     public ProtocolSnapshot Udp => _udp.Snapshot();
@@ -68,6 +71,7 @@ public sealed class TunnelDiagnostics
         _tcp.Reset();
         _udp.Reset();
         EgressSelfTest = null;
+        RoutingEngineRunning = false;
         _events.Clear();
         Raise();
     }
@@ -77,6 +81,10 @@ public sealed class TunnelDiagnostics
         Scope = scope;
         Raise();
     }
+
+    public void SetBackend(ProcessRoutingBackend backend) => Backend = backend;
+
+    public void SetRoutingEngineRunning(bool running) => RoutingEngineRunning = running;
 
     public void PacketCaptured() => Interlocked.Increment(ref _networkPacketsSeen);
 
@@ -168,17 +176,29 @@ public sealed class TunnelDiagnostics
     {
         var sb = new StringBuilder();
         sb.AppendLine("Diagnóstico da conexão");
+        sb.AppendLine($"Motor de roteamento {Backend}");
         sb.AppendLine($"Protocolos roteados {DescribeScope(Scope)}");
-        sb.AppendLine($"Captura de tráfego  {NetworkPacketsSeen} pacotes; {SocketEventsSeen} eventos de socket" +
-                      (LastCaptureError == 0 ? "" : $"; código Win32 {LastCaptureError}"));
-        sb.AppendLine($"Identificação de PID {PidFromSocketLayer} por socket; {PidFromIpHelper} via IP Helper; {PidUnresolved} sem PID");
-        sb.AppendLine($"Processo monitorado {MatchedTarget} pacotes de {MatchedTarget + NotTarget} avaliados");
-        sb.AppendLine($"Redirecionamento   TCP {Tcp.Redirected}; UDP {Udp.Redirected}; IPv6 ignorado {Ipv6Dropped}");
+        if (Backend == ProcessRoutingBackend.WinDivert)
+        {
+            sb.AppendLine($"Captura de tráfego  {NetworkPacketsSeen} pacotes; {SocketEventsSeen} eventos de socket" +
+                          (LastCaptureError == 0 ? "" : $"; código Win32 {LastCaptureError}"));
+            sb.AppendLine($"Identificação de PID {PidFromSocketLayer} por socket; {PidFromIpHelper} via IP Helper; {PidUnresolved} sem PID");
+            sb.AppendLine($"Processo monitorado {MatchedTarget} pacotes de {MatchedTarget + NotTarget} avaliados");
+            sb.AppendLine($"Redirecionamento   TCP {Tcp.Redirected}; UDP {Udp.Redirected}; IPv6 ignorado {Ipv6Dropped}");
+        }
+        else
+        {
+            sb.AppendLine($"Estado do motor    {(RoutingEngineRunning ? "em execução" : "parado")}; endpoint SOCKS5 local em loopback");
+            sb.AppendLine("Família roteada    IPv4; tráfego IPv6 não é encaminhado pelo ProxiFyre nesta configuração");
+        }
         sb.AppendLine($"Conexões pela VPN  TCP {Tcp.UpstreamOk} ok/{Tcp.UpstreamFailed} falhas; UDP {Udp.UpstreamOk} ok/{Udp.UpstreamFailed} falhas");
         sb.AppendLine($"Dados transferidos TCP {FormatBytes(Tcp.BytesUp)} enviados, {FormatBytes(Tcp.BytesDown)} recebidos; " +
                       $"UDP {FormatBytes(Udp.BytesUp)} enviados, {FormatBytes(Udp.BytesDown)} recebidos");
-        sb.AppendLine($"Pacotes reinjetados {InjectOk} ok; {InjectFailed} falhas" +
-                      (LastInjectError == 0 ? "" : $"; código Win32 {LastInjectError}"));
+        if (Backend == ProcessRoutingBackend.WinDivert)
+        {
+            sb.AppendLine($"Pacotes reinjetados {InjectOk} ok; {InjectFailed} falhas" +
+                          (LastInjectError == 0 ? "" : $"; código Win32 {LastInjectError}"));
+        }
         sb.AppendLine($"Teste de saída      {EgressSelfTest?.Summary ?? "Não executado"}");
         sb.AppendLine();
         sb.AppendLine("Eventos recentes");

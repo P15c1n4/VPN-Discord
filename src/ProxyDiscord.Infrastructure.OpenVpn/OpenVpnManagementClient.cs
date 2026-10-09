@@ -88,7 +88,10 @@ internal sealed class OpenVpnManagementClient(
                 return false;
             }
 
+            // management-hold persists across restarts; clear it before release so
+            // OpenVPN can reconnect after a transport reset without another hold.
             return await SendCommandAsync("state on", cancellationToken) &&
+                   await SendCommandAsync("hold off", cancellationToken) &&
                    await SendCommandAsync("hold release", cancellationToken);
         }
 

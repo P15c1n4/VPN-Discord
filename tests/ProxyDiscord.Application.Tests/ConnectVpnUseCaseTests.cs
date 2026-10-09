@@ -104,12 +104,18 @@ public sealed class ConnectVpnUseCaseTests
             add { }
             remove { }
         }
+        public event EventHandler<RoutingEngineFailureEventArgs>? Failed
+        {
+            add { }
+            remove { }
+        }
         public bool IsRunning => false;
         public Task StartAsync(
             TargetProcessSelector target,
             VpnAdapterInfo vpnAdapter,
             TunnelDnsSettings dnsSettings,
             TunnelProtocolScope scope = TunnelProtocolScope.TcpAndUdp,
+            ProcessRoutingBackend backend = ProcessRoutingBackend.WinDivert,
             CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

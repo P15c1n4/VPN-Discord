@@ -24,18 +24,3 @@ public sealed class ConnectionStatusToColorConverter : IValueConverter
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();
 }
-
-public sealed class ConnectionStatusToTextConverter : IValueConverter
-{
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
-    {
-        ConnectionStatus.Idle => "Desconectado",
-        ConnectionStatus.Connecting => "Conectando",
-        ConnectionStatus.Connected => "Conectado",
-        ConnectionStatus.Error => "Erro",
-        _ => "Desconectado"
-    };
-
-    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        throw new NotSupportedException();
-}

@@ -282,7 +282,6 @@ internal sealed class OpenVpnProfileWriter(ILogger<OpenVpnProfileWriter> logger,
 
     private static bool IsAppManagedDirective(string directive) =>
         APP_MANAGED_DIRECTIVES.Contains(directive) ||
-        string.Equals(directive, "management", StringComparison.OrdinalIgnoreCase) ||
         directive.StartsWith("management-", StringComparison.OrdinalIgnoreCase);
 
     private static bool HasClientAuthenticationMethod(string config, bool includeUsernamePassword)
