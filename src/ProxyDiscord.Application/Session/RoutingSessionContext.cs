@@ -7,6 +7,8 @@ namespace ProxyDiscord.Application.Session;
 
 public sealed class RoutingSessionContext : IRoutingSessionContext
 {
+    internal SessionLifecycle Lifecycle { get; } = new();
+
     private ConnectionStatus _status = ConnectionStatus.Idle;
     private ProcessInfo? _targetProcess;
     private TimeSpan? _latency;

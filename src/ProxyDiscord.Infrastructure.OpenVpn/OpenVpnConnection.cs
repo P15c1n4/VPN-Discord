@@ -153,6 +153,10 @@ internal sealed class OpenVpnConnection(
                     startupToken);
             }
 
+            logger.LogInformation("Aguardando o IPv4 {Ip} ficar utilizável na interface VPN {IfIdx}.",
+                adapterInfo.LocalIp, adapterInfo.InterfaceIndex);
+            await TunnelAdapterReadiness.WaitAsync(adapterInfo, startupToken);
+
             lock (_lock)
             {
                 _adapterInfo = adapterInfo;
@@ -238,7 +242,20 @@ internal sealed class OpenVpnConnection(
 
         if (process is not null)
         {
-            await WaitOrKillAsync(process);
+            try
+            {
+                await WaitOrKillAsync(process, SHUTDOWN_GRACE, logger);
+            }
+            catch
+            {
+                lock (_lock)
+                {
+                    _process = process;
+                    _management = management;
+                    _profile = profile;
+                }
+                throw;
+            }
             process.Dispose();
         }
 
@@ -470,14 +487,7 @@ internal sealed class OpenVpnConnection(
     {
         try
         {
-            return NetworkInterface.GetAllNetworkInterfaces().Any(network =>
-            {
-                var properties = network.GetIPProperties();
-                return properties.GetIPv4Properties()?.Index == adapter.InterfaceIndex &&
-                       properties.UnicastAddresses.Any(address =>
-                           address.Address.AddressFamily == AddressFamily.InterNetwork &&
-                           string.Equals(address.Address.ToString(), adapter.LocalIp, StringComparison.Ordinal));
-            });
+            return TunnelAdapterReadiness.HasUsableAddress(adapter);
         }
         catch (NetworkInformationException)
         {
@@ -715,25 +725,24 @@ internal sealed class OpenVpnConnection(
         return tail.Length <= MAX_CHARACTERS ? tail : tail[^MAX_CHARACTERS..];
     }
 
-    private async Task WaitOrKillAsync(Process process)
+    internal static async Task WaitOrKillAsync(Process process, TimeSpan shutdownGrace, ILogger logger)
     {
         try
         {
-            using var cts = new CancellationTokenSource(SHUTDOWN_GRACE);
+            using var cts = new CancellationTokenSource(shutdownGrace);
             await process.WaitForExitAsync(cts.Token);
         }
         catch (OperationCanceledException)
         {
-            try
+            if (!process.HasExited)
             {
-                logger.LogWarning("O OpenVPN não encerrou em {Seconds}s; finalizando.", SHUTDOWN_GRACE.TotalSeconds);
+                logger.LogWarning("O OpenVPN não encerrou em {Seconds}s; finalizando.", shutdownGrace.TotalSeconds);
                 process.Kill(entireProcessTree: true);
             }
-            catch (SystemException)
-            {
-            }
+
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException) when (process.HasExited)
         {
         }
     }

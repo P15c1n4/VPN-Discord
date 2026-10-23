@@ -14,6 +14,22 @@ public sealed class DisconnectVpnUseCase(
 {
     public async Task ExecuteAsync(CancellationToken cancellationToken = default)
     {
+        try { await sessionContext.Lifecycle.CancelAttemptAsync(); }
+        catch (Exception ex) { logger.LogWarning(ex, "Falha ao sinalizar cancelamento da tentativa; aguardando a limpeza"); }
+        await sessionContext.Lifecycle.Gate.WaitAsync(CancellationToken.None);
+        try
+        {
+            await ExecuteCoreAsync(CancellationToken.None);
+        }
+        finally
+        {
+            sessionContext.Lifecycle.FinishDisconnect();
+            sessionContext.Lifecycle.Gate.Release();
+        }
+    }
+
+    private async Task ExecuteCoreAsync(CancellationToken cancellationToken)
+    {
         try
         {
             await routingEngine.StopAsync(cancellationToken);

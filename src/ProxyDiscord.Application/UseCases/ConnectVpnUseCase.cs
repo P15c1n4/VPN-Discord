@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using ProxyDiscord.Application.Diagnostics;
 using ProxyDiscord.Application.Dtos;
 using ProxyDiscord.Application.Ports;
 using ProxyDiscord.Application.Session;
@@ -18,15 +19,47 @@ public sealed class ConnectVpnUseCase(
     ISystemClock clock,
     RoutingSessionContext sessionContext,
     ILogger<ConnectVpnUseCase> logger,
-    TimeSpan? trafficObservationTimeout = null)
+    TimeSpan? trafficObservationTimeout = null,
+    TunnelDiagnostics? diagnostics = null)
 {
     private readonly TimeSpan _trafficObservationTimeout = trafficObservationTimeout ?? TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CONNECTION_OPERATION_TIMEOUT = TimeSpan.FromMinutes(5);
 
     public async Task<VpnConnectionResult> ExecuteAsync(ConnectVpnCommand command, CancellationToken cancellationToken = default)
     {
+        if (!await sessionContext.Lifecycle.Gate.WaitAsync(0, cancellationToken))
+        {
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error,
+                "Já existe uma conexão ou limpeza em andamento. Aguarde a conclusão.");
+        }
+
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (sessionContext.Status is ConnectionStatus.Connected or ConnectionStatus.Connecting)
+        {
+            sessionContext.Lifecycle.Gate.Release();
+            return VpnConnectionResult.Failed(VpnLinkStatus.Error, "Desconecte a sessão atual antes de iniciar outra conexão.");
+        }
+        if (!sessionContext.Lifecycle.TrySetAttempt(attempt))
+        {
+            sessionContext.Lifecycle.Gate.Release();
+            return VpnConnectionResult.Failed(VpnLinkStatus.Disconnected, "A desconexão está em andamento. Aguarde a conclusão.");
+        }
+        try
+        {
+            return await ExecuteCoreAsync(command, attempt.Token);
+        }
+        finally
+        {
+            sessionContext.Lifecycle.ClearAttempt();
+            sessionContext.Lifecycle.Gate.Release();
+        }
+    }
+
+    private async Task<VpnConnectionResult> ExecuteCoreAsync(ConnectVpnCommand command, CancellationToken cancellationToken)
+    {
         sessionContext.SetTargetProcess(command.TargetProcess);
         sessionContext.SetConnecting();
+        diagnostics?.Reset();
 
         using var operationTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         operationTimeout.CancelAfter(CONNECTION_OPERATION_TIMEOUT);
@@ -73,8 +106,6 @@ public sealed class ConnectVpnUseCase(
             command.OpenVpnConfigBase64,
             command.UseProfileOpenVpnCredentials);
 
-        // Captura antes de discar: o OpenVPN pode alterar as rotas assim que o túnel sobe.
-        // A consulta direta do auto-teste precisa continuar presa à interface física original.
         try
         {
             // Captura antes de discar: o OpenVPN pode alterar as rotas assim que o túnel sobe.
@@ -94,9 +125,11 @@ public sealed class ConnectVpnUseCase(
             }
 
             vpnEstablished = true;
+            operationToken.ThrowIfCancellationRequested();
 
             SetStage("localização do adaptador VPN");
             var adapter = await vpnConnection.GetAdapterInfoAsync(operationToken);
+            operationToken.ThrowIfCancellationRequested();
             if (adapter is null)
             {
                 const string adapterError = "VPN conectada, mas não foi possível localizar o adaptador de rede correspondente.";
@@ -122,6 +155,7 @@ public sealed class ConnectVpnUseCase(
 
             SetStage("teste de saída pela VPN");
             var selfTest = await egressSelfTest.RunAsync(adapter, directInterface, operationToken);
+            operationToken.ThrowIfCancellationRequested();
             if (!selfTest.Success)
             {
                 var error = $"A conexão VPN não passou no teste de saída: {selfTest.Summary}";
@@ -143,6 +177,11 @@ public sealed class ConnectVpnUseCase(
                     command.ProtocolScope,
                     command.RoutingBackend,
                     operationToken);
+                operationToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -155,6 +194,7 @@ public sealed class ConnectVpnUseCase(
 
             SetStage("observação inicial do tráfego");
             var trafficObserved = await WaitForTrafficAsync(operationToken);
+            operationToken.ThrowIfCancellationRequested();
             if (!trafficObserved)
             {
                 logger.LogInformation(
@@ -169,6 +209,7 @@ public sealed class ConnectVpnUseCase(
                 new ConnectionStateRecord(ownerPid, ownerStartedUtc, command.TargetProcess.Pid, command.TargetProcess.Name, entryName, clock.UtcNow),
                 operationToken);
 
+            operationToken.ThrowIfCancellationRequested();
             sessionContext.SetConnected(latency: null);
             return VpnConnectionResult.Ok(VpnLinkStatus.Connected);
         }

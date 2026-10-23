@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
     <ProjectReference Include="..\..\src\ProxyDiscord.Application\ProxyDiscord.Application.csproj" />
     <ProjectReference Include="..\..\src\ProxyDiscord.Domain\ProxyDiscord.Domain.csproj" />
     <ProjectReference Include="..\..\src\ProxyDiscord.Infrastructure.StateStore\ProxyDiscord.Infrastructure.StateStore.csproj" />
@@ -20,6 +22,7 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <PlatformTarget>x64</PlatformTarget>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

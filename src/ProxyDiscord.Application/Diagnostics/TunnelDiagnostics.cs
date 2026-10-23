@@ -55,7 +55,7 @@ public sealed class TunnelDiagnostics
 
     public event EventHandler? Updated;
 
-    public void Reset()
+    public void Reset(bool preserveEgressSelfTest = false)
     {
         Interlocked.Exchange(ref _networkPacketsSeen, 0);
         Interlocked.Exchange(ref _socketEventsSeen, 0);
@@ -70,7 +70,7 @@ public sealed class TunnelDiagnostics
         Volatile.Write(ref _lastInjectError, 0);
         _tcp.Reset();
         _udp.Reset();
-        EgressSelfTest = null;
+        if (!preserveEgressSelfTest) EgressSelfTest = null;
         RoutingEngineRunning = false;
         _events.Clear();
         Raise();

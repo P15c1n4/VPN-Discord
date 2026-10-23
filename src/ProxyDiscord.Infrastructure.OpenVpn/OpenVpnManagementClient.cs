@@ -27,7 +27,8 @@ internal sealed class OpenVpnManagementClient(
     string? username = null,
     string? password = null,
     string? managementPassword = null,
-    IOpenVpnInteractivePrompt? interactivePrompt = null) : IDisposable
+    IOpenVpnInteractivePrompt? interactivePrompt = null,
+    TimeSpan? commandResponseTimeout = null) : IDisposable
 {
     private static readonly TimeSpan CONNECT_RETRY_DELAY = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan MANAGEMENT_RESPONSE_TIMEOUT = TimeSpan.FromSeconds(60);
@@ -36,6 +37,9 @@ internal sealed class OpenVpnManagementClient(
     private StreamReader? _reader;
     private StreamWriter? _writer;
     private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private readonly Queue<ManagementCommand> _commands = new();
+    private readonly TimeSpan _commandResponseTimeout = commandResponseTimeout ?? MANAGEMENT_RESPONSE_TIMEOUT;
+    private bool _commandChannelFailed;
     private volatile OpenVpnState _state;
     private volatile string? _lastStateMessage;
     private int _credentialRequestCount;
@@ -211,7 +215,7 @@ internal sealed class OpenVpnManagementClient(
         {
             while (!timeoutCts.IsCancellationRequested && _reader is { } reader)
             {
-                var line = await reader.ReadLineAsync(timeoutCts.Token);
+                var line = await ReadManagementLineAsync(timeoutCts.Token);
                 if (line is null)
                 {
                     break;
@@ -244,7 +248,7 @@ internal sealed class OpenVpnManagementClient(
 
         try
         {
-            while (!cancellationToken.IsCancellationRequested && await reader.ReadLineAsync(cancellationToken) is { } line)
+            while (!cancellationToken.IsCancellationRequested && await ReadManagementLineAsync(cancellationToken) is { } line)
             {
                 await HandleLineAsync(line, cancellationToken);
             }
@@ -258,7 +262,7 @@ internal sealed class OpenVpnManagementClient(
         }
         finally
         {
-            if (!cancellationToken.IsCancellationRequested && State is not OpenVpnState.Exiting)
+            if (!cancellationToken.IsCancellationRequested && State is not (OpenVpnState.Exiting or OpenVpnState.AuthFailed))
             {
                 State = OpenVpnState.Exiting;
                 LastStateMessage = "A interface de gerenciamento do OpenVPN foi encerrada.";
@@ -279,6 +283,12 @@ internal sealed class OpenVpnManagementClient(
         }
 
         var previousState = State;
+
+        if (line.StartsWith("SUCCESS:", StringComparison.Ordinal) || line.StartsWith("ERROR:", StringComparison.Ordinal))
+        {
+            await CompleteCommandAsync(line.StartsWith("SUCCESS:", StringComparison.Ordinal));
+            return;
+        }
 
         if (!line.StartsWith(">STATE:", StringComparison.Ordinal))
         {
@@ -307,7 +317,7 @@ internal sealed class OpenVpnManagementClient(
                     var requestNumber = Interlocked.Increment(ref _credentialRequestCount);
                     await SendCredentialResponseAsync(username, password);
                     logger.LogDebug(
-                        "Credenciais da sessão enviadas à interface OpenVPN para a solicitação {RequestNumber}.",
+                        "Resposta de credenciais enfileirada para a solicitação OpenVPN {RequestNumber}.",
                         requestNumber);
                 }
             }
@@ -315,6 +325,7 @@ internal sealed class OpenVpnManagementClient(
             {
                 State = OpenVpnState.AuthFailed;
                 LastStateMessage = "O servidor recusou as credenciais de autenticação.";
+                FailCommandQueue(LastStateMessage);
             }
 
             NotifyStateChange(previousState);
@@ -370,7 +381,7 @@ internal sealed class OpenVpnManagementClient(
             return;
         }
 
-        await SendAsync($"password \"Private Key\" {Quote(response.Password)}");
+        await QueueCommandAsync($"password \"Private Key\" {Quote(response.Password)}", "password (Private Key)", isCredential: true);
     }
 
     private async Task HandleStaticChallengeAsync(
@@ -409,8 +420,7 @@ internal sealed class OpenVpnManagementClient(
 
         var encodedPassword = Convert.ToBase64String(Encoding.UTF8.GetBytes(response.Password));
         var encodedChallenge = Convert.ToBase64String(Encoding.UTF8.GetBytes(response.ChallengeResponse));
-        await SendAsync($"username \"Auth\" {Quote(response.Username)}");
-        await SendAsync($"password \"Auth\" {Quote($"SCRV1:{encodedPassword}:{encodedChallenge}")}");
+        await SendCredentialResponseAsync(response.Username, $"SCRV1:{encodedPassword}:{encodedChallenge}");
     }
 
     private static bool TryGetStaticChallenge(string line, out string challengeText, out bool echo)
@@ -454,6 +464,7 @@ internal sealed class OpenVpnManagementClient(
     {
         try
         {
+            // Shutdown must interrupt a missing credential ACK, not wait behind it.
             await SendAsync("signal SIGTERM");
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
@@ -470,8 +481,8 @@ internal sealed class OpenVpnManagementClient(
             return;
         }
 
-        await SendAsync($"username \"Auth\" {Quote(user)}");
-        await SendAsync($"password \"Auth\" {Quote(secret)}");
+        await QueueCommandAsync($"username \"Auth\" {Quote(user)}", "username (Auth)", isCredential: true);
+        await QueueCommandAsync($"password \"Auth\" {Quote(secret)}", "password (Auth)", isCredential: true);
     }
 
     private static string Quote(string value) =>
@@ -495,7 +506,7 @@ internal sealed class OpenVpnManagementClient(
 
     private async Task<bool> SendCommandAsync(string command, CancellationToken cancellationToken)
     {
-        await SendAsync(command);
+        var pending = await QueueCommandAsync(command, command);
 
         if (_reader is not { } reader)
         {
@@ -503,31 +514,20 @@ internal sealed class OpenVpnManagementClient(
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(MANAGEMENT_RESPONSE_TIMEOUT);
+        timeoutCts.CancelAfter(_commandResponseTimeout);
 
         try
         {
-            while (await reader.ReadLineAsync(timeoutCts.Token) is { } line)
+            while (!pending.Completion.Task.IsCompleted && await ReadManagementLineAsync(timeoutCts.Token) is { } line)
             {
                 await HandleLineAsync(line, timeoutCts.Token);
-
-                if (line.StartsWith("SUCCESS:", StringComparison.Ordinal))
-                {
-                    return true;
-                }
-
-                if (line.StartsWith("ERROR:", StringComparison.Ordinal))
-                {
-                    StartupFailureReason = $"A interface de gerenciamento recusou o comando '{command}'.";
-                    logger.LogWarning("O OpenVPN recusou o comando '{Command}' da interface de gerenciamento.", command);
-                    return false;
-                }
             }
+
+            if (pending.Completion.Task.IsCompleted) return await pending.Completion.Task;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            StartupFailureReason = $"A interface de gerenciamento não confirmou o comando '{command}' em até 60 segundos.";
-            logger.LogWarning("O OpenVPN não confirmou o comando '{Command}' da interface de gerenciamento.", command);
+            FailCommandQueue($"A interface de gerenciamento não confirmou o comando '{command}' em até {_commandResponseTimeout.TotalSeconds:0.###} segundos.");
         }
         catch (IOException)
         {
@@ -538,8 +538,95 @@ internal sealed class OpenVpnManagementClient(
         return false;
     }
 
+    // Only the current reader drives this queue. Credential handlers enqueue and return;
+    // awaiting their ACK here would prevent that same reader from receiving it.
+    private async Task<ManagementCommand> QueueCommandAsync(string text, string name, bool isCredential = false)
+    {
+        var command = new ManagementCommand(text, name, isCredential);
+        if (_commandChannelFailed)
+        {
+            command.Text = null;
+            command.Completion.TrySetResult(false);
+            return command;
+        }
+        _commands.Enqueue(command);
+        if (_commands.Count == 1) await SendQueuedCommandAsync(command);
+        return command;
+    }
+
+    private async Task SendQueuedCommandAsync(ManagementCommand command)
+    {
+        command.DeadlineUtc = DateTime.UtcNow + _commandResponseTimeout;
+        try { await SendAsync(command.Text!); }
+        finally { command.Text = null; }
+    }
+
+    private async Task CompleteCommandAsync(bool success)
+    {
+        if (!_commands.TryPeek(out var command)) return;
+        if (!success)
+        {
+            FailCommandQueue($"A interface de gerenciamento recusou o comando '{command.Name}'.");
+            return;
+        }
+        _commands.Dequeue();
+        command.Completion.TrySetResult(true);
+        logger.LogDebug("OpenVPN confirmou o comando {Command}.", command.Name);
+        if (_commands.TryPeek(out var next)) await SendQueuedCommandAsync(next);
+    }
+
+    private async Task<string?> ReadManagementLineAsync(CancellationToken cancellationToken)
+    {
+        if (_reader is not { } reader) return null;
+        if (!_commands.TryPeek(out var command)) return await reader.ReadLineAsync(cancellationToken);
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var remaining = command.DeadlineUtc - DateTime.UtcNow;
+        timeout.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+        try
+        {
+            var line = await reader.ReadLineAsync(timeout.Token);
+            if (line is null) FailCommandQueue("A interface de gerenciamento encerrou a conexão com um comando pendente.");
+            return line;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            FailCommandQueue($"A interface de gerenciamento não confirmou o comando '{command.Name}' em até {_commandResponseTimeout.TotalSeconds:0.###} segundos.");
+            return null;
+        }
+    }
+
+    private void FailCommandQueue(string reason)
+    {
+        _commandChannelFailed = true;
+        StartupFailureReason ??= reason;
+        var previousState = State;
+        if (_commands.Any(command => command.IsCredential)) FailAuthentication(reason);
+        while (_commands.TryDequeue(out var command))
+        {
+            command.Text = null;
+            command.Completion.TrySetResult(false);
+        }
+        logger.LogWarning("{Reason}", reason);
+        NotifyStateChange(previousState);
+    }
+
+    private sealed class ManagementCommand(string text, string name, bool isCredential)
+    {
+        public string? Text { get; set; } = text;
+        public string Name { get; } = name;
+        public bool IsCredential { get; } = isCredential;
+        public DateTime DeadlineUtc { get; set; }
+        public TaskCompletionSource<bool> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
     public void Dispose()
     {
+        while (_commands.TryDequeue(out var command))
+        {
+            command.Text = null;
+            command.Completion.TrySetResult(false);
+        }
         _reader?.Dispose();
         _writer?.Dispose();
         _client?.Dispose();

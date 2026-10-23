@@ -10,7 +10,6 @@ namespace ProxyDiscord.Infrastructure.Routing;
 
 public sealed class ProxiFyreRoutingEngine : IProcessRoutingEngine
 {
-    private static readonly TimeSpan STARTUP_CHECK_DELAY = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan STOP_TIMEOUT = TimeSpan.FromSeconds(15);
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly LocalSocks5VpnEndpoint socksEndpoint;
@@ -18,6 +17,9 @@ public sealed class ProxiFyreRoutingEngine : IProcessRoutingEngine
     private readonly ILogger<ProxiFyreRoutingEngine> logger;
     private Process? _process;
     private volatile bool _stopping;
+    private volatile bool _ready;
+    private int _failureRaised;
+    private ProxiFyreLogSession? _logSession;
 
     internal ProxiFyreRoutingEngine(
         LocalSocks5VpnEndpoint socksEndpoint,
@@ -29,7 +31,7 @@ public sealed class ProxiFyreRoutingEngine : IProcessRoutingEngine
         this.logger = logger;
     }
 
-    public bool IsRunning => _process is { HasExited: false };
+    public bool IsRunning => _ready && _process is { HasExited: false };
     public event EventHandler? TrafficObserved;
     public event EventHandler<RoutingEngineFailureEventArgs>? Failed;
 
@@ -68,20 +70,22 @@ public sealed class ProxiFyreRoutingEngine : IProcessRoutingEngine
             Directory.CreateDirectory(Path.Combine(directory, "logs"));
             try
             {
-                diagnostics.Reset();
+                _failureRaised = 0;
+                diagnostics.Reset(preserveEgressSelfTest: true);
                 diagnostics.SetBackend(ProcessRoutingBackend.ProxiFyre);
                 diagnostics.SetScope(scope);
                 socksEndpoint.Start(vpnAdapter, dnsSettings);
                 await WriteConfigurationAsync(directory, executable, target, scope, cancellationToken);
-                _process = HiddenConsoleProcess.Start(executable, directory);
-                _process.EnableRaisingEvents = true;
-                _process.Exited += OnProcessExited;
-                await Task.Delay(STARTUP_CHECK_DELAY, cancellationToken);
-                if (_process.HasExited)
-                {
-                    throw new InvalidOperationException(
-                        $"O ProxiFyre encerrou durante a inicialização (código {_process.ExitCode}). {ReadLatestLog(directory)}");
-                }
+                var logSession = new ProxiFyreLogSession(Path.Combine(directory, "logs"), socksEndpoint.Port, scope);
+                _logSession = logSession;
+                var process = HiddenConsoleProcess.Start(executable, directory);
+                _process = process;
+                process.Exited += OnProcessExited;
+                process.EnableRaisingEvents = true;
+                logger.LogInformation("Aguardando o ProxiFyre preparar o roteamento para o SOCKS5 local na porta {Port}.", socksEndpoint.Port);
+                await logSession.WaitUntilReadyAsync(() => process.HasExited, () => process.ExitCode, cancellationToken);
+                _ready = true;
+                if (process.HasExited) throw new InvalidOperationException(logSession.DescribeExit(process.ExitCode));
             }
             catch
             {
@@ -123,24 +127,12 @@ public sealed class ProxiFyreRoutingEngine : IProcessRoutingEngine
     {
         socksEndpoint.TrafficObserved -= OnTrafficObserved;
         var process = _process;
-        _stopping = process is not null;
+        _stopping = true;
+        _ready = false;
+        if (process is not null) process.Exited -= OnProcessExited;
         try
         {
-            await socksEndpoint.StopAsync();
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Falha ao encerrar o endpoint SOCKS5; o processo ProxiFyre ainda será parado");
-        }
-
-        if (process is null)
-        {
-            return;
-        }
-
-        process.Exited -= OnProcessExited;
-        try
-        {
+            if (process is null) return;
             if (!process.HasExited)
             {
                 if (!HiddenConsoleProcess.SendCtrlBreak(process.Id))
@@ -158,7 +150,7 @@ public sealed class ProxiFyreRoutingEngine : IProcessRoutingEngine
                     try
                     {
                         if (!process.HasExited) process.Kill(entireProcessTree: true);
-                        await process.WaitForExitAsync();
+                        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
                     }
                     catch (InvalidOperationException) when (process.HasExited)
                     {
@@ -168,10 +160,13 @@ public sealed class ProxiFyreRoutingEngine : IProcessRoutingEngine
         }
         finally
         {
-            if (process.HasExited)
+            try { await socksEndpoint.StopAsync(); }
+            catch (Exception ex) { logger.LogWarning(ex, "Falha ao encerrar o endpoint SOCKS5"); }
+            if (process is null || process.HasExited)
             {
-                process.Dispose();
+                process?.Dispose();
                 _process = null;
+                _logSession = null;
                 diagnostics.SetRoutingEngineRunning(false);
                 diagnostics.Note("Roteamento por processo ProxiFyre encerrado.");
             }
@@ -250,29 +245,16 @@ public sealed class ProxiFyreRoutingEngine : IProcessRoutingEngine
         }
     }
 
-    private static string ReadLatestLog(string directory)
-    {
-        try
-        {
-            var log = Directory.GetFiles(Path.Combine(directory, "logs"), "*.log")
-                .Select(path => new FileInfo(path))
-                .OrderByDescending(file => file.LastWriteTimeUtc)
-                .FirstOrDefault();
-            if (log is null) return "Consulte os logs em proxifyre\\managed\\logs.";
-            return string.Join(" | ", File.ReadLines(log.FullName).TakeLast(8));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return $"Não foi possível ler o log do ProxiFyre: {ex.Message}";
-        }
-    }
-
     private void OnTrafficObserved(object? sender, EventArgs args) => TrafficObserved?.Invoke(this, EventArgs.Empty);
 
     private void OnProcessExited(object? sender, EventArgs args)
     {
-        if (_stopping) return;
-        var reason = "O processo ProxiFyre encerrou inesperadamente.";
+        if (_stopping || !_ready || sender is not Process process || !ReferenceEquals(process, _process) ||
+            Interlocked.Exchange(ref _failureRaised, 1) != 0) return;
+        _ready = false;
+        string reason;
+        try { reason = _logSession?.DescribeExit(process.ExitCode) ?? $"O ProxiFyre encerrou (código {process.ExitCode})."; }
+        catch (InvalidOperationException) { return; }
         diagnostics.SetRoutingEngineRunning(false);
         diagnostics.Note(reason, DiagnosticSeverity.Error);
         logger.LogError(reason);

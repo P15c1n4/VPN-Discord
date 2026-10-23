@@ -87,7 +87,7 @@ public sealed class ProcessRoutingEngine(
         }
 
         _scope = scope;
-        diagnostics.Reset();
+        diagnostics.Reset(preserveEgressSelfTest: true);
         diagnostics.SetBackend(ProcessRoutingBackend.WinDivert);
         diagnostics.SetScope(scope);
 

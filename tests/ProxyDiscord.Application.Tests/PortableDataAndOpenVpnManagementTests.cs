@@ -355,13 +355,17 @@ public sealed class PortableDataAndOpenVpnManagementTests
             await writer.WriteLineAsync("SUCCESS: hold release");
             await writer.WriteLineAsync(">PASSWORD:Need 'Auth' username/password");
             Assert.Equal("username \"Auth\" \"alícia\"", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: 'Auth' username entered, but not yet verified");
             Assert.Equal("password \"Auth\" \"sëc\\\"ret\\\\x\"", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: 'Auth' password entered, but not yet verified");
             await writer.WriteLineAsync(">STATE:2026-09-26 12:00:00,CONNECTED,SUCCESS,10.8.0.2,10.8.0.1");
 
             await requestReauthentication.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await writer.WriteLineAsync(">PASSWORD:Need 'Auth' username/password");
             Assert.Equal("username \"Auth\" \"alícia\"", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: 'Auth' username entered, but not yet verified");
             Assert.Equal("password \"Auth\" \"sëc\\\"ret\\\\x\"", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: 'Auth' password entered, but not yet verified");
         });
 
         using var client = new OpenVpnManagementClient(
@@ -558,6 +562,7 @@ public sealed class PortableDataAndOpenVpnManagementTests
             await writer.WriteLineAsync("SUCCESS: hold release");
             await writer.WriteLineAsync(">PASSWORD:Need 'Private Key' password");
             Assert.Equal("password \"Private Key\" \"key-secret\"", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: 'Private Key' password entered, but not yet verified");
             await writer.WriteLineAsync(">STATE:2026-09-26 12:00:00,CONNECTED,SUCCESS,10.8.0.2,10.8.0.1");
         });
 
@@ -590,10 +595,12 @@ public sealed class PortableDataAndOpenVpnManagementTests
             await writer.WriteLineAsync("SUCCESS: hold release");
             await writer.WriteLineAsync(">PASSWORD:Need 'Auth' username/password SC:E:Token code");
             Assert.Equal("username \"Auth\" \"alice\"", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: 'Auth' username entered, but not yet verified");
             var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes("vpn-secret"));
             var answer = Convert.ToBase64String(Encoding.UTF8.GetBytes("123456"));
             Assert.Equal($"password \"Auth\" \"SCRV1:{encoded}:{answer}\"",
                 await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+            await writer.WriteLineAsync("SUCCESS: 'Auth' password entered, but not yet verified");
             await writer.WriteLineAsync(">STATE:2026-09-26 12:00:00,CONNECTED,SUCCESS,10.8.0.2,10.8.0.1");
         });
 

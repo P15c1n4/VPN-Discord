@@ -19,7 +19,7 @@ internal sealed class SstpVpnConnection(
 
     public VpnProtocol Protocol => VpnProtocol.Sstp;
 
-    private static readonly TimeSpan CONNECT_TIMEOUT = TimeSpan.FromSeconds(25);
+    private static readonly TimeSpan CONNECT_TIMEOUT = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan POLL_INTERVAL = TimeSpan.FromMilliseconds(500);
 
     private string? _activeEntryName;
@@ -141,7 +141,7 @@ internal sealed class SstpVpnConnection(
         {
             while (!timeoutCts.IsCancellationRequested)
             {
-                if (adapterLocator.IsUp(entryName))
+                if (adapterLocator.ResolveAdapterInfo(entryName) is not null)
                 {
                     return true;
                 }

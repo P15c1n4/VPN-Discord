@@ -142,6 +142,10 @@ public sealed class SavedCredentialsUseCaseTests
 
     private sealed class FakeCredentialsStore : IServerCredentialsStore
     {
+        public Task<IReadOnlyList<SavedServerCredential>> ListAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<SavedServerCredential>>([]);
+        public Task DeleteAsync(string serverKey, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ClearAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public ServerCredentials? Stored { get; set; }
         public string? LastPassword { get; private set; }
         public int SaveCount { get; private set; }

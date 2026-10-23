@@ -45,6 +45,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     private string? _lastCredentialServerKey;
     private bool _credentialsWereLoadedFromStore;
     private OpenVpnAuthenticationInfo? _localProfileAuthentication;
+    private HostEndpoint? _localProfileEndpoint;
     private bool _isLocalOpenVpnProfile;
     private bool _isResolvingExecutable;
     [ObservableProperty]
@@ -275,6 +276,10 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         if (!_applyingCredentials)
         {
             _usernameWasManuallyEntered = true;
+            if (_credentialsWereLoadedFromStore && !_passwordWasManuallyEntered)
+            {
+                SetPasswordWithoutMarkingManual("");
+            }
         }
 
         ConnectCommand.NotifyCanExecuteChanged();
@@ -364,6 +369,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             _selectedServer = null;
             _selectedOpenVpnConfig = profile.ConfigBase64;
             _localProfileAuthentication = profile.Authentication;
+            _localProfileEndpoint = profile.Endpoint;
             _isLocalOpenVpnProfile = true;
             ResetCredentialTarget();
             SetCredentialsWithoutMarkingManual("", "");
@@ -547,8 +553,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
                     _usernameWasManuallyEntered = false;
                 }
 
-                if (!_passwordWasManuallyEntered ||
-                    !string.Equals(_manualPasswordServerKey, serverKey, StringComparison.Ordinal))
+                if (string.Equals(Username, credentials.Username, StringComparison.Ordinal) &&
+                    (!_passwordWasManuallyEntered ||
+                     !string.Equals(_manualPasswordServerKey, serverKey, StringComparison.Ordinal)))
                 {
                     if (credentials.Password is not null)
                     {
@@ -654,6 +661,14 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
+        if (SelectedProtocol == VpnProtocol.OpenVpn && _localProfileEndpoint is { } profileEndpoint &&
+            (!string.Equals(ServerHost.Trim().Trim('[', ']').TrimEnd('.'), profileEndpoint.Host.TrimEnd('.'), StringComparison.OrdinalIgnoreCase) ||
+             !int.TryParse(ServerPort, out var profilePort) || profilePort != profileEndpoint.Port))
+        {
+            ErrorMessage = "O endereço informado não corresponde ao perfil .ovpn. Recarregue o arquivo ou altere a diretiva remote no perfil.";
+            return;
+        }
+
         if (!PromptForOpenVpnCredentialSource(out var useProfileCredentials))
         {
             return;
@@ -671,6 +686,12 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             useProfileCredentials,
             SelectedRoutingBackend);
 
+        var credentialServerKey = CreateCredentialServerKey();
+        var validatedManualPassword = _passwordWasManuallyEntered &&
+            string.Equals(_manualPasswordServerKey, credentialServerKey, StringComparison.Ordinal) &&
+            string.Equals(_manualPasswordValue, command.Password, StringComparison.Ordinal)
+                ? command.Password : null;
+
         var result = await _connectVpnUseCase.ExecuteAsync(command);
         if (!result.Success)
         {
@@ -678,11 +699,16 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             return;
         }
 
-        await SaveCredentialsAfterSuccessfulConnectionAsync(credentialsWereUsed: !useProfileCredentials);
+        await SaveCredentialsAfterSuccessfulConnectionAsync(
+            credentialServerKey, command.Username ?? "", validatedManualPassword, credentialsWereUsed: !useProfileCredentials);
     }
 
-    private string ComposeServerAddress() =>
-        string.IsNullOrWhiteSpace(ServerPort) ? ServerHost.Trim() : $"{ServerHost.Trim()}:{ServerPort.Trim()}";
+    private string ComposeServerAddress()
+    {
+        var host = ServerHost.Trim();
+        if (host.Contains(':') && !host.StartsWith('[')) host = $"[{host}]";
+        return string.IsNullOrWhiteSpace(ServerPort) ? host : $"{host}:{ServerPort.Trim()}";
+    }
 
     [RelayCommand(CanExecute = nameof(CanDisconnect))]
     private async Task DisconnectAsync()
@@ -700,6 +726,7 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         _selectedServer = entry;
         _localProfileAuthentication = null;
+        _localProfileEndpoint = null;
         _isLocalOpenVpnProfile = false;
         _applyingVpnGateSelection = true;
         try
@@ -832,24 +859,29 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         return host.Length == 0 ? null : $"{SelectedProtocol}:{host}:{port}";
     }
 
-    private async Task SaveCredentialsAfterSuccessfulConnectionAsync(bool credentialsWereUsed)
+    public async Task RefreshAfterCredentialsManagementAsync()
     {
-        var serverKey = CreateCredentialServerKey();
+        if (_credentialsWereLoadedFromStore && !_usernameWasManuallyEntered && !_passwordWasManuallyEntered)
+        {
+            SetCredentialsWithoutMarkingManual("", "");
+            _credentialsWereLoadedFromStore = false;
+        }
+        await LoadSavedCredentialsForCurrentServerAsync();
+    }
+
+    private async Task SaveCredentialsAfterSuccessfulConnectionAsync(
+        string? serverKey, string username, string? manualPassword, bool credentialsWereUsed)
+    {
         if (!credentialsWereUsed || !SaveCredentialsEnabled || serverKey is null ||
-            (string.IsNullOrWhiteSpace(Username) && string.IsNullOrEmpty(_manualPasswordValue)))
+            (string.IsNullOrWhiteSpace(username) && string.IsNullOrEmpty(manualPassword)))
         {
             return;
         }
 
-        var manualPassword = _passwordWasManuallyEntered &&
-                             string.Equals(_manualPasswordServerKey, serverKey, StringComparison.Ordinal)
-            ? _manualPasswordValue
-            : null;
-
         try
         {
             await _savedCredentialsUseCase.SaveAfterSuccessfulConnectionAsync(
-                serverKey, Username, manualPassword, connectionSucceeded: true);
+                serverKey, username, manualPassword, connectionSucceeded: true);
         }
         catch (Exception ex)
         {
@@ -865,7 +897,9 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
         ConnectCommand.NotifyCanExecuteChanged();
 
         var lastColon = value.LastIndexOf(':');
-        if (lastColon <= 0 || lastColon >= value.Length - 1)
+        if (lastColon <= 0 || lastColon >= value.Length - 1 ||
+            value.Contains(':') && value.Count(character => character == ':') > 1 &&
+            !(value.StartsWith('[') && value[..lastColon].EndsWith(']')))
         {
             return;
         }

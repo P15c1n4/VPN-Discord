@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using ProxyDiscord.Application.Dtos;
 using ProxyDiscord.Application.Ports;
+using ProxyDiscord.Domain.Exceptions;
 
 namespace ProxyDiscord.Application.UseCases;
 
@@ -16,7 +17,7 @@ public sealed class LoadOpenVpnProfileUseCase(IOpenVpnProfileSource profileSourc
                 profile.FileName, profile.Endpoint, profile.Transport);
             return new LoadOpenVpnProfileResult(profile, null);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or AddressParseException or ArgumentException or NotSupportedException)
         {
             logger.LogWarning(ex, "Perfil OpenVPN '{File}' recusado", filePath);
             return new LoadOpenVpnProfileResult(null, ex.Message);

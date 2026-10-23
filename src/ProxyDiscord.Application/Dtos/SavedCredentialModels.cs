@@ -12,3 +12,5 @@ public enum ProcessRoutingBackend
 }
 
 public sealed record ServerCredentials(string Username, string? Password);
+
+public sealed record SavedServerCredential(string ServerKey, string Username, bool HasPassword);

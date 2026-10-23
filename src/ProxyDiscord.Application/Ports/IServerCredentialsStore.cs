@@ -4,6 +4,9 @@ namespace ProxyDiscord.Application.Ports;
 
 public interface IServerCredentialsStore
 {
+    Task<IReadOnlyList<SavedServerCredential>> ListAsync(CancellationToken cancellationToken = default);
+    Task DeleteAsync(string serverKey, CancellationToken cancellationToken = default);
+    Task ClearAsync(CancellationToken cancellationToken = default);
     Task<ServerCredentials?> FindAsync(string serverKey, CancellationToken cancellationToken = default);
 
     // A null password means no new manual password was entered; the adapter preserves the

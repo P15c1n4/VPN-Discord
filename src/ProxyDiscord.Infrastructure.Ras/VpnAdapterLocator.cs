@@ -43,7 +43,11 @@ internal sealed class VpnAdapterLocator(ILogger<VpnAdapterLocator> logger)
 
         var ipProperties = adapter.GetIPProperties();
         var localIp = ipProperties.UnicastAddresses
-            .FirstOrDefault(a => a.Address.AddressFamily == AddressFamily.InterNetwork)?.Address;
+            .FirstOrDefault(a => a.Address.AddressFamily == AddressFamily.InterNetwork &&
+                                 a.DuplicateAddressDetectionState == DuplicateAddressDetectionState.Preferred &&
+                                 !a.Address.Equals(System.Net.IPAddress.Any) &&
+                                 !a.Address.Equals(System.Net.IPAddress.Broadcast) &&
+                                 !System.Net.IPAddress.IsLoopback(a.Address))?.Address;
 
         if (localIp is null)
         {

@@ -5,6 +5,7 @@ using System.Windows.Input;
 using ProxyDiscord.Application.Dtos;
 using ProxyDiscord.Presentation.Wpf.Shell;
 using ProxyDiscord.Presentation.Wpf.ViewModels;
+using ProxyDiscord.Application.UseCases;
 
 namespace ProxyDiscord.Presentation.Wpf.Views;
 
@@ -14,12 +15,15 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private bool _syncingPassword;
 
-    public MainWindow(MainWindowViewModel viewModel)
+    private readonly SavedCredentialsUseCase _savedCredentials;
+
+    public MainWindow(MainWindowViewModel viewModel, SavedCredentialsUseCase savedCredentials)
     {
+        _savedCredentials = savedCredentials;
         _viewModel = viewModel;
         DataContext = viewModel;
         InitializeComponent();
-        DataObject.AddPastingHandler(PasswordInput, PasswordInput_Pasting);
+        Deactivated += (_, _) => PasswordInput.HidePassword();
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
 
         if (AppIcons.TryLoadAppIcon() is { } icon)
@@ -116,7 +120,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void PasswordInput_Pasting(object sender, DataObjectPastingEventArgs e) => PasswordInput.SelectAll();
+    private async void ManageCredentials_Click(object sender, RoutedEventArgs e)
+    {
+        new SavedCredentialsWindow(_savedCredentials) { Owner = this }.ShowDialog();
+        await _viewModel.RefreshAfterCredentialsManagementAsync();
+    }
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

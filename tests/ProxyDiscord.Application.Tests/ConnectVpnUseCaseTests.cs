@@ -12,6 +12,76 @@ namespace ProxyDiscord.Application.Tests;
 
 public sealed class ConnectVpnUseCaseTests
 {
+    [Fact]
+    public async Task DisconnectDuringTheExitTestCancelsTheWholeAttemptAndRejectsAnotherConnect()
+    {
+        var vpn = new FakeVpnConnection();
+        var routing = new FakeRoutingEngine();
+        var routes = new FakeRouteManager();
+        var state = new FakeStateStore();
+        var session = new RoutingSessionContext();
+        var probe = new BlockingEgressSelfTest();
+        var connect = new ConnectVpnUseCase(vpn, routing, routes, probe, new FakeOutboundInterfaceResolver(),
+            state, new FakeLivenessChecker(), new FakeClock(), session, NullLogger<ConnectVpnUseCase>.Instance, TimeSpan.Zero);
+        var disconnect = new DisconnectVpnUseCase(routing, vpn, routes, state, session,
+            NullLogger<DisconnectVpnUseCase>.Instance);
+        var command = TestCommand();
+        var first = connect.ExecuteAsync(command);
+        await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var stopping = disconnect.ExecuteAsync();
+        Assert.False(stopping.IsCompleted);
+        var second = await connect.ExecuteAsync(command);
+        Assert.False(second.Success);
+        Assert.Equal(1, vpn.ConnectCount);
+        probe.Release.TrySetResult();
+        Assert.False((await first.WaitAsync(TimeSpan.FromSeconds(2))).Success);
+        await stopping.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(ConnectionStatus.Idle, session.Status);
+        Assert.Equal(0, routing.StartCount);
+        Assert.Equal(0, state.WriteCount);
+        Assert.True((await connect.ExecuteAsync(command)).Success);
+        Assert.Equal(ConnectionStatus.Connected, session.Status);
+        Assert.Equal(2, vpn.ConnectCount);
+    }
+
+    [Fact]
+    public async Task DisconnectDuringTrafficObservationCannotResurrectTheSession()
+    {
+        var vpn = new FakeVpnConnection();
+        var routing = new FakeRoutingEngine();
+        var routes = new FakeRouteManager();
+        var state = new FakeStateStore();
+        var session = new RoutingSessionContext();
+        var connect = new ConnectVpnUseCase(vpn, routing, routes, new SuccessfulEgressSelfTest(),
+            new FakeOutboundInterfaceResolver(), state, new FakeLivenessChecker(), new FakeClock(), session,
+            NullLogger<ConnectVpnUseCase>.Instance, TimeSpan.FromMinutes(1));
+        var disconnect = new DisconnectVpnUseCase(routing, vpn, routes, state, session,
+            NullLogger<DisconnectVpnUseCase>.Instance);
+        var attempt = connect.ExecuteAsync(TestCommand());
+        Assert.Equal(1, routing.StartCount);
+        await disconnect.ExecuteAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False((await attempt).Success);
+        Assert.Equal(ConnectionStatus.Idle, session.Status);
+        Assert.Equal(0, state.WriteCount);
+    }
+
+    [Fact]
+    public async Task AnActiveSessionRejectsAnotherConnectionWithoutChangingItsStatus()
+    {
+        var vpn = new FakeVpnConnection();
+        var session = new RoutingSessionContext();
+        session.SetConnected(null);
+        var connect = new ConnectVpnUseCase(vpn, new FakeRoutingEngine(), new FakeRouteManager(),
+            new SuccessfulEgressSelfTest(), new FakeOutboundInterfaceResolver(), new FakeStateStore(),
+            new FakeLivenessChecker(), new FakeClock(), session, NullLogger<ConnectVpnUseCase>.Instance);
+        Assert.False((await connect.ExecuteAsync(TestCommand())).Success);
+        Assert.Equal(ConnectionStatus.Connected, session.Status);
+        Assert.Equal(0, vpn.ConnectCount);
+    }
+
+    private static ConnectVpnCommand TestCommand() => new(new ProcessInfo(1234, "discord", null),
+        "vpn.example:443", VpnProtocol.OpenVpn, "user", "secret", "profile");
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -75,11 +145,15 @@ public sealed class ConnectVpnUseCaseTests
     private sealed class FakeVpnConnection : IVpnConnection
     {
         public int DisconnectCount { get; private set; }
+        public int ConnectCount { get; private set; }
         public event EventHandler<VpnConnectionLostEventArgs>? ConnectionLost;
         public void LoseConnection(string reason) => ConnectionLost?.Invoke(this, new VpnConnectionLostEventArgs(reason));
 
-        public Task<VpnConnectionResult> ConnectAsync(VpnConnectionRequest request, CancellationToken cancellationToken = default) =>
-            Task.FromResult(VpnConnectionResult.Ok(VpnLinkStatus.Connected));
+        public Task<VpnConnectionResult> ConnectAsync(VpnConnectionRequest request, CancellationToken cancellationToken = default)
+        {
+            ConnectCount++;
+            return Task.FromResult(VpnConnectionResult.Ok(VpnLinkStatus.Connected));
+        }
 
         public Task DisconnectAsync(CancellationToken cancellationToken = default)
         {
@@ -115,6 +189,26 @@ public sealed class ConnectVpnUseCaseTests
             throw new InvalidOperationException("Falha inesperada no teste de saída.");
     }
 
+    private sealed class SuccessfulEgressSelfTest : IVpnEgressSelfTest
+    {
+        public Task<EgressSelfTestResult> RunAsync(VpnAdapterInfo adapter, OutboundInterfaceInfo? directInterface = null,
+            CancellationToken cancellationToken = default) => Task.FromResult(new EgressSelfTestResult(true, "OK"));
+    }
+
+    private sealed class BlockingEgressSelfTest : IVpnEgressSelfTest
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<EgressSelfTestResult> RunAsync(VpnAdapterInfo adapter, OutboundInterfaceInfo? directInterface = null,
+            CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            // Simula uma etapa externa que termina mesmo depois do cancelamento.
+            await Release.Task;
+            return new EgressSelfTestResult(true, "OK");
+        }
+    }
+
     private sealed class FakeOutboundInterfaceResolver : IOutboundInterfaceResolver
     {
         public Task<OutboundInterfaceInfo?> CapturePhysicalInterfaceAsync(CancellationToken cancellationToken = default) =>
@@ -131,6 +225,7 @@ public sealed class ConnectVpnUseCaseTests
         public event EventHandler<RoutingEngineFailureEventArgs>? Failed;
         public void Fail(string reason) => Failed?.Invoke(this, new RoutingEngineFailureEventArgs(reason));
         public int StopCount { get; private set; }
+        public int StartCount { get; private set; }
         public bool IsRunning => false;
         public Task StartAsync(
             TargetProcessSelector target,
@@ -138,7 +233,11 @@ public sealed class ConnectVpnUseCaseTests
             TunnelDnsSettings dnsSettings,
             TunnelProtocolScope scope = TunnelProtocolScope.TcpAndUdp,
             ProcessRoutingBackend backend = ProcessRoutingBackend.WinDivert,
-            CancellationToken cancellationToken = default) => Task.CompletedTask;
+            CancellationToken cancellationToken = default)
+        {
+            StartCount++;
+            return Task.CompletedTask;
+        }
         public Task StopAsync(CancellationToken cancellationToken = default)
         {
             StopCount++;
@@ -150,7 +249,12 @@ public sealed class ConnectVpnUseCaseTests
     private sealed class FakeStateStore : IConnectionStateStore
     {
         public int ClearCount { get; private set; }
-        public Task WriteActiveStateAsync(ConnectionStateRecord record, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public int WriteCount { get; private set; }
+        public Task WriteActiveStateAsync(ConnectionStateRecord record, CancellationToken cancellationToken = default)
+        {
+            WriteCount++;
+            return Task.CompletedTask;
+        }
         public Task ClearStateAsync(CancellationToken cancellationToken = default)
         {
             ClearCount++;

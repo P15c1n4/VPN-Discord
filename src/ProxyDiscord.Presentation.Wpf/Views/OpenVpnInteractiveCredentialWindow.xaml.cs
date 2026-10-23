@@ -11,6 +11,7 @@ public partial class OpenVpnInteractiveCredentialWindow : Window
     {
         InitializeComponent();
         _request = request;
+        Deactivated += (_, _) => PasswordInput.HidePassword();
         MessageText.Text = request.Message;
         if (request.Kind == OpenVpnPromptKind.PrivateKeyPassphrase)
         {

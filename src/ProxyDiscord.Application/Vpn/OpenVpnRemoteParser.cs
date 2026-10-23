@@ -10,14 +10,17 @@ public static partial class OpenVpnRemoteParser
     private const int DEFAULT_OPENVPN_PORT = 1194;
 
     [GeneratedRegex(
-        @"^\s*remote\s+(?<host>\S+)(?:\s+(?<port>\d{1,5}))?(?:\s+(?<remoteProto>tcp(?:4|6)?(?:-client)?|udp(?:4|6)?))?\s*$",
+        @"^[\t ]*remote[\t ]+(?<host>[^\s#;]+)(?:[\t ]+(?<port>\d{1,5}))?(?:[\t ]+(?<remoteProto>[^\s#;]+))?[\t ]*(?:[#;][^\r\n]*)?\r?$",
         RegexOptions.Multiline | RegexOptions.IgnoreCase)]
     private static partial Regex RemoteDirective();
 
     [GeneratedRegex(
-        @"^\s*proto\s+(?<proto>tcp(?:4|6)?(?:-client)?|udp(?:4|6)?)\s*$",
+        @"^[\t ]*proto[\t ]+(?<proto>[^\s#;]*)[\t ]*(?:[#;][^\r\n]*)?\r?$",
         RegexOptions.Multiline | RegexOptions.IgnoreCase)]
     private static partial Regex ProtoDirective();
+
+    [GeneratedRegex(@"^(?:tcp(?:4|6)?(?:-client)?|udp(?:4|6)?)$", RegexOptions.IgnoreCase)]
+    private static partial Regex ClientProtocol();
 
     public static OpenVpnRemote? TryParse(string? config)
     {
@@ -40,9 +43,15 @@ public static partial class OpenVpnRemoteParser
         }
 
         var remoteProto = remote.Groups["remoteProto"];
-        var profileProto = ProtoDirective().Match(config).Groups["proto"];
+        var profileDirective = ProtoDirective().Match(config);
+        var profileProto = profileDirective.Groups["proto"];
+        if (remoteProto.Success && !ClientProtocol().IsMatch(remoteProto.Value) ||
+            profileDirective.Success && !ClientProtocol().IsMatch(profileProto.Value))
+        {
+            return null;
+        }
         var protocol = remoteProto.Success ? remoteProto.Value : profileProto.Value;
-        var transport = protocol.StartsWith("udp", StringComparison.OrdinalIgnoreCase)
+        var transport = string.IsNullOrEmpty(protocol) || protocol.StartsWith("udp", StringComparison.OrdinalIgnoreCase)
             ? TransportProtocol.Udp
             : TransportProtocol.Tcp;
 

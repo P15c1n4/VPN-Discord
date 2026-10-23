@@ -7,6 +7,17 @@ public sealed class SavedCredentialsUseCase(
     IUserConfigurationStore configurationStore,
     IServerCredentialsStore credentialsStore)
 {
+    public Task<IReadOnlyList<SavedServerCredential>> ListSavedAsync(CancellationToken cancellationToken = default) =>
+        credentialsStore.ListAsync(cancellationToken);
+
+    public Task<ServerCredentials?> ReadSavedAsync(string serverKey, CancellationToken cancellationToken = default) =>
+        credentialsStore.FindAsync(serverKey, cancellationToken);
+
+    public Task DeleteAsync(string serverKey, CancellationToken cancellationToken = default) =>
+        credentialsStore.DeleteAsync(serverKey, cancellationToken);
+
+    public Task ClearAsync(CancellationToken cancellationToken = default) => credentialsStore.ClearAsync(cancellationToken);
+
     public Task<UserConfiguration> ReadConfigurationAsync(CancellationToken cancellationToken = default) =>
         configurationStore.ReadAsync(cancellationToken);
 

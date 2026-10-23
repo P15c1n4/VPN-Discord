@@ -150,6 +150,47 @@ public sealed class JsonApplicationDataStore : IUserConfigurationStore, IServerC
         }
     }
 
+    public async Task<IReadOnlyList<SavedServerCredential>> ListAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await EnsureLoadedLockedAsync(cancellationToken);
+            return _credentials.OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(entry => new SavedServerCredential(entry.Key, entry.Value.Username, entry.Value.Password is not null)).ToArray();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task DeleteAsync(string serverKey, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await EnsureLoadedLockedAsync(cancellationToken);
+            var updated = Clone(_credentialDocument!);
+            if (!updated.Servers.Remove(serverKey)) return;
+            await JsonFile.WriteAtomicallyAsync(_credentialsPath, updated, JSON_OPTIONS, cancellationToken);
+            _credentialDocument = updated;
+            _credentials.Remove(serverKey);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task ClearAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await EnsureLoadedLockedAsync(cancellationToken);
+            var updated = new CredentialDocument();
+            await JsonFile.WriteAtomicallyAsync(_credentialsPath, updated, JSON_OPTIONS, cancellationToken);
+            _credentialDocument = updated;
+            _credentials.Clear();
+        }
+        finally { _gate.Release(); }
+    }
+
     private async Task EnsureLoadedLockedAsync(CancellationToken cancellationToken)
     {
         if (_configuration is not null)
